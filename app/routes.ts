@@ -4,6 +4,9 @@ export default [
   route("/", "routes/landing.tsx"),
   route("/marketplace", "routes/marketplace.tsx"),
   route("/login", "routes/login.tsx"),
+  route("/dashboard", "routes/dashboard.tsx"),
+  route("/upload", "routes/upload.tsx"),
+  route("/object-selection/:assetId", "routes/object-selection.$assetId.tsx"),
   route("/projects", "routes/projects.tsx"),
   route("/profile", "routes/profile.tsx"),
   route("/project/:id", "routes/project.$id.tsx", [
@@ -16,6 +19,8 @@ export default [
   route("/api/projects/*", "routes/api.projects.$.tsx"),
   route("/api/assets/*", "routes/api.assets.$.tsx"),
   route("/api/storage/*", "routes/api.storage.$.tsx"),
+  route("/api/dify/*", "routes/api.dify.$.tsx"),
+  route("/api/processing/*", "routes/api.processing.$.tsx"),
   route("/learn", "routes/learn.tsx"),
   route("/roadmap", "routes/roadmap.tsx"),
   route("/privacy", "routes/privacy.tsx"),

@@ -451,24 +451,25 @@ export const TimelineRuler: React.FC<TimelineRulerProps> = ({
 
           {/* Playhead line - contained within ruler */}
           <div
-            className="absolute top-0 w-0.5 bg-primary pointer-events-none z-30 shadow-sm"
+            className="absolute top-0 w-0.5 bg-black pointer-events-none z-30"
             style={{
               left: `${rulerPositionPx}px`,
               height: "24px",
             }}
           />
 
-          {/* Playhead handle - compact design */}
+          {/* Playhead handle - 倒三角黑色 */}
           <div
-            className="absolute bg-primary cursor-grab hover:cursor-grabbing z-30 border border-background shadow-lg hover:shadow-xl transition-shadow"
+            className="absolute cursor-grab hover:cursor-grabbing z-30"
             style={{
-              left: `${rulerPositionPx - 4}px`,
-              top: "2px",
-              width: "8px",
-              height: "8px",
-              borderRadius: "1px",
-              transform: "none",
-              transition: "box-shadow 0.15s ease",
+              left: `${rulerPositionPx}px`,
+              top: "0px",
+              width: "0",
+              height: "0",
+              borderLeft: "6px solid transparent",
+              borderRight: "6px solid transparent",
+              borderTop: "8px solid black",
+              transform: "translateX(-50%)",
             }}
             onMouseDown={onRulerMouseDown}
             title="Drag to seek"

@@ -1,15 +1,14 @@
 import {
   isRouteErrorResponse,
-  Links,
-  Meta,
   Outlet,
   Scripts,
   ScrollRestoration,
   useLoaderData,
   useLocation,
   useMatches,
+  useRouteError,
 } from "react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Component, type ReactNode } from "react";
 
 import "./app.css";
 import { Toaster } from "./components/ui/sonner";
@@ -25,12 +24,17 @@ export const links = () => [
   {
     rel: "preconnect",
     href: "https://fonts.gstatic.com",
-    crossOrigin: "anonymous",
+    crossOrigin: "anonymous" as const,
   },
   {
     rel: "stylesheet",
     href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
   },
+];
+
+export const meta = () => [
+  { title: "ObjectRemover - AI Video Object Removal & Extraction" },
+  { name: "description", content: "Remove or extract objects from videos with AI precision" },
 ];
 
 export async function loader({ request }: { request: Request }) {
@@ -45,13 +49,17 @@ export async function loader({ request }: { request: Request }) {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  // 手动渲染 links，避免使用 Links 组件（避免上下文问题）
+  const linkTags = links();
+  
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <Meta />
-        <Links />
+        {linkTags.map((link, index) => (
+          <link key={index} {...link} />
+        ))}
         <script defer src="https://cloud.umami.is/script.js" data-website-id="d8ab00c1-6fa6-4aad-b152-e14e178c0f24" />
       </head>
       <body className="min-h-screen font-sans antialiased">
@@ -74,14 +82,16 @@ export default function App() {
   const isNotFound = (matches[matches.length - 1]?.id || "").includes("NotFound");
   const hideNavbar =
     isNotFound ||
-    location.pathname === "/projects" ||
+    location.pathname === "/dashboard" ||
     location.pathname.startsWith("/project/") ||
-    location.pathname === "/profile";
+    location.pathname === "/profile" ||
+    location.pathname.startsWith("/object-selection/");
   const hideFooter =
     isNotFound ||
-    location.pathname === "/projects" ||
+    location.pathname === "/dashboard" ||
     location.pathname.startsWith("/project/") ||
-    location.pathname === "/profile";
+    location.pathname === "/profile" ||
+    location.pathname.startsWith("/object-selection/");
 
   useEffect(() => {
     // Only apply hero intersection logic on the landing page
@@ -115,7 +125,31 @@ export default function App() {
   );
 }
 
-export function ErrorBoundary({ error }: { error: Error }) {
+// ErrorBoundary component that safely handles React Router context issues
+// React Router v7 passes error via useRouteError(), but we need to handle context being null
+export function ErrorBoundary() {
+  // Use a wrapper that safely handles the hook call
+  return <ErrorBoundaryWrapper />;
+}
+
+// Wrapper component that safely accesses React Router hooks
+function ErrorBoundaryWrapper() {
+  // Try to get error from React Router context
+  // If context is unavailable, this will fail gracefully
+  let error: unknown = new Error("An unexpected error occurred");
+  
+  // Use a try-catch to safely call useRouteError
+  // If the context is null, the hook will throw, and we catch it
+  try {
+    error = useRouteError();
+  } catch (err: any) {
+    // If we can't access the context, use fallback error
+    if (process.env.NODE_ENV === "development") {
+      console.warn("ErrorBoundary: React Router context unavailable, using fallback error", err);
+    }
+    error = new Error("An unexpected error occurred. Please refresh the page.");
+  }
+
   let message = "Oops!";
   let details = "An unexpected error occurred.";
   let stack: string | undefined;

@@ -68,3 +68,7 @@ learn.json
 .mypy_cache/
 idk.tsx
 idk.ts
+
+# Local documentation files (not committed)
+*.md
+!README.md

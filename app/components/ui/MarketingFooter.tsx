@@ -1,6 +1,5 @@
 import * as React from "react";
-import { KimuLogo } from "~/components/ui/KimuLogo";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Scissors } from "lucide-react";
 import { toast } from "sonner";
 
 export function MarketingFooter() {
@@ -33,7 +32,10 @@ export function MarketingFooter() {
         <footer className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 pt-20 sm:pt-24 pb-[40vw] sm:pb-[32vw] md:pb-[22vw] grid grid-cols-1 md:grid-cols-12 gap-y-10 md:gap-y-12 gap-x-12 md:gap-x-16 font-mono">
           {/* Left column + Waitlist & Newsletter */}
           <div className="flex flex-col space-y-6 md:col-span-5 font-sans min-w-0">
-            <KimuLogo className="w-10 h-10 text-black" />
+            <div className="flex items-center gap-2">
+              <Scissors className="w-8 h-8 text-black" />
+              <span className="text-2xl font-bold text-black">ObjectRemover</span>
+            </div>
             <div className="mt-10 max-w-md">
               <form onSubmit={handleSubmit} className="w-full">
                 <div className="text-[11px] uppercase tracking-[0.15em] text-black/60 mb-4">
@@ -68,13 +70,8 @@ export function MarketingFooter() {
             <h3 className="font-semibold mb-3 uppercase">The Good</h3>
             <ul className="space-y-2 text-sm">
               <li><a href="/" className="hover:underline">Home</a></li>
-              <li><a href="http://deepwiki.com/trykimu/videoeditor/" target="_blank" rel="noreferrer" className="hover:underline">Docs</a></li>
-              <li>
-                <div className="inline-flex items-center gap-2">
-                  <span>Plugins</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full border border-black/40 text-black/70">Coming soon</span>
-                </div>
-              </li>
+              <li><a href="/privacy" className="hover:underline">Privacy</a></li>
+              <li><a href="/terms" className="hover:underline">Terms</a></li>
             </ul>
           </div>
 
@@ -91,16 +88,14 @@ export function MarketingFooter() {
           <div className="md:col-start-11 md:col-span-2">
             <h3 className="font-semibold mb-3 uppercase">The Cool</h3>
             <ul className="space-y-2 text-sm">
-              <li><a href="https://twitter.com/trykimu" target="_blank" rel="noreferrer" className="hover:underline">X</a></li>
-              <li><a href="https://github.com/trykimu/videoeditor" target="_blank" rel="noreferrer" className="hover:underline">GitHub</a></li>
-              <li><a href="https://discord.gg/24Mt5DGcbx" target="_blank" rel="noreferrer" className="hover:underline">Discord</a></li>
+              <li><a href="https://github.com/objectremover" target="_blank" rel="noreferrer" className="hover:underline">GitHub</a></li>
             </ul>
           </div>
         </footer>
 
-        {/* Big KIMU wordmark pinned to the very bottom */}
+        {/* Big ObjectRemover wordmark pinned to the very bottom */}
         <div className="absolute bottom-0 left-0 right-0 flex justify-center pointer-events-none z-0">
-          <h1 className="text-[16vw] md:text-[18vw] font-extrabold leading-none text-black/10 select-none tracking-tight">TRYKIMU</h1>
+          <h1 className="text-[12vw] md:text-[14vw] font-extrabold leading-none text-black/10 select-none tracking-tight">OBJECTREMOVER</h1>
         </div>
       </div>
     </div>

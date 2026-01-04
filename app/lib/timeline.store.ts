@@ -31,6 +31,24 @@ function getFilePath(projectId: string): string {
 export type ProjectStateFile = {
   timeline: TimelineState;
   textBinItems: MediaBinItem[];
+  taskData?: {
+    assetId: string;
+    clickPoints: Array<{
+      id: string;
+      frameIndex: number;
+      timestamp: number;
+      x: number;
+      y: number;
+      frameUrl: string;
+    }>;
+    maskData: {
+      preview: string;
+      maskUrl?: string;
+      predictionId?: string;
+    } | null;
+    selectedFrameIndex: number | null;
+    pendingAction: "remove" | "extract" | null;
+  };
 };
 
 function defaultTimeline(): TimelineState {

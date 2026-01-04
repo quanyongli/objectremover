@@ -4,17 +4,13 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai
 from pydantic import BaseModel, ConfigDict
 
 from schema import FunctionCallResponse, MediaBinItem, TimelineState
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
 app = FastAPI()
-gemini_api = genai.Client(api_key=GEMINI_API_KEY)
 
 # Enable CORS
 app.add_middleware(
@@ -40,44 +36,19 @@ class Message(BaseModel):
 
 @app.post("/ai")
 async def process_ai_message(request: Message) -> FunctionCallResponse:
-    print(FunctionCallResponse)
-    try:
-        response = gemini_api.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=f"""
-            You are Kimu, an AI assistant inside a video editor. You can decide to either:
-            - call ONE tool from the provided schema when the user explicitly asks for an editing action, or
-            - return a short friendly assistant_message when no concrete action is needed (e.g., greetings, small talk, clarifying questions).
-
-            Strictly follow:
-            - If the user's message does not clearly request an editing action, set function_call to null and include an assistant_message.
-            - Only produce a function_call when it is safe and unambiguous to execute.
-
-            Inference rules:
-            - Assume a single active timeline; do NOT require a timeline_id.
-            - Tracks are named like "track-1", but when the user says "track 1" they mean number 1.
-            - Use pixels_per_second=100 by default if not provided.
-            - When the user names media like "twitter" or "twitter header", map that to the closest media in the media bin by name substring match.
-            - Prefer LLMAddScrubberByName when the user specifies a name, track number, and time in seconds.
-            - If the user asks to remove scrubbers in a specific track, call LLMDeleteScrubbersInTrack with that track number.
-
-            Conversation so far (oldest first): {request.chat_history}
-
-            User message: {request.message}
-            Mentioned scrubber ids: {request.mentioned_scrubber_ids}
-            Timeline state: {request.timeline_state}
-            Media bin items: {request.mediabin_items}
-            """,
-            config={
-                "response_mime_type": "application/json",
-                "response_schema": FunctionCallResponse,
-            },
-        )
-        print(response)
-
-        return FunctionCallResponse.model_validate(response.parsed)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    """
+    AI endpoint for video editor chat functionality.
+    
+    Note: This endpoint is currently disabled as the project uses Dify AI instead of Gemini.
+    The ChatBox component should be migrated to use Dify API similar to ObjectSelectionChatBox.
+    
+    Returns a placeholder response indicating the endpoint is not available.
+    """
+    # TODO: Migrate this endpoint to use Dify API or remove if ChatBox is no longer used
+    return FunctionCallResponse(
+        function_call=None,
+        assistant_message="此功能已迁移到 Dify AI。请使用新的 AI 助手。"
+    )
 
 
 if __name__ == "__main__":
