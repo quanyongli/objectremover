@@ -36,7 +36,7 @@ export default function ProjectEditorRoute() {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, {
         credentials: "include",
       });
-      if (!res.ok) navigate("/projects");
+      if (!res.ok) navigate("/dashboard");
     })();
   }, [id, navigate]);
 

@@ -206,47 +206,49 @@ export async function action({ request }: { request: Request }) {
     )
       ? body.textBinItems
       : undefined;
-    if (!name && !timeline && !textBinItems)
+    const taskData = body?.taskData;
+    if (!name && !timeline && !textBinItems && !taskData)
       return new Response(JSON.stringify({ error: "No changes" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     // simple update
-    // inline update using pg (reuse pool via repo)
-    // quick import avoided; execute with small query here
+    // inline update using Supabase or direct database
+    const { getSupabaseClient, getDirectDbPool } = await import("~/lib/supabase.server");
+    const supabase = getSupabaseClient();
 
-    // @ts-ignore
-    const { Pool } = await import("pg");
-    const rawDbUrl = process.env.DATABASE_URL || "";
-    let connectionString = rawDbUrl;
-    try {
-      const u = new URL(rawDbUrl);
-      u.search = "";
-      connectionString = u.toString();
-    } catch {
-      console.error("Invalid database URL");
-    }
-    const pool = new Pool({
-      connectionString,
-      ssl: process.env.NODE_ENV === "production" 
-        ? { rejectUnauthorized: true }
-        : { rejectUnauthorized: false }, // Only disable in development
-    });
     try {
       if (name) {
-        await pool.query(
-          `update projects set name = $1, updated_at = now() where id = $2 and user_id = $3`,
-          [name, id, userId]
-        );
+        if (supabase) {
+          const { error } = await supabase
+            .from("projects")
+            .update({ name, updated_at: new Date().toISOString() })
+            .eq("id", id)
+            .eq("user_id", userId);
+
+          if (error) throw error;
+        } else {
+          const pool = getDirectDbPool();
+          try {
+            await pool.query(
+              `update projects set name = $1, updated_at = now() where id = $2 and user_id = $3`,
+              [name, id, userId]
+            );
+          } finally {
+            await pool.end().catch(() => {});
+          }
+        }
       }
-    } finally {
-      await pool.end();
+    } catch (error: any) {
+      console.error("Failed to update project:", error);
+      throw error;
     }
-    if (timeline || textBinItems) {
+    if (timeline || textBinItems || taskData) {
       const prev = await loadProjectState(id);
       await saveProjectState(id, {
         timeline: timeline ?? prev.timeline,
         textBinItems: textBinItems ?? prev.textBinItems,
+        taskData: taskData ?? prev.taskData,
       });
     }
     return new Response(JSON.stringify({ success: true }), {

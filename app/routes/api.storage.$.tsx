@@ -53,41 +53,66 @@ export async function loader({ request }: { request: Request }) {
   if (pathname.endsWith("/api/storage") && request.method === "GET") {
     const userId = await requireUserId(request);
 
-    // Query the materialized view user_storage to get total_storage_bytes for this user
-    // Create a transient Pool to avoid coupling to repo internals
-
-    // @ts-ignore
-    const { Pool } = await import("pg");
-    const rawDbUrl = process.env.DATABASE_URL || "";
-    let connectionString = rawDbUrl;
-    try {
-      const u = new URL(rawDbUrl);
-      u.search = "";
-      connectionString = u.toString();
-    } catch {
-      console.error("Invalid database URL");
-    }
-    const pool = new Pool({
-      connectionString,
-      ssl: process.env.NODE_ENV === "production" 
-        ? { rejectUnauthorized: true }
-        : { rejectUnauthorized: false }, // Only disable in development
-    });
+    const { getSupabaseClient, queryWithFallback, getDirectDbPool } = await import("~/lib/supabase.server");
+    const supabase = getSupabaseClient();
 
     let usedBytes = 0;
-    try {
-      const res = await pool.query<{ total_storage_bytes: string | number }>(
-        `select total_storage_bytes from user_storage where user_id = $1 limit 1`,
-        [userId]
-      );
-      if (res.rows.length > 0) {
-        const val = res.rows[0].total_storage_bytes;
-        usedBytes =
-          typeof val === "string" ? parseInt(val, 10) : Number(val || 0);
-        if (!Number.isFinite(usedBytes) || usedBytes < 0) usedBytes = 0;
+
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("assets")
+          .select("size_bytes")
+          .eq("user_id", userId)
+          .is("deleted_at", null);
+
+        if (error) throw error;
+
+        usedBytes = (data || []).reduce((sum, asset) => sum + (asset.size_bytes || 0), 0);
+      } catch (error: any) {
+        console.warn("⚠️ Supabase query failed, falling back to direct database:", error.message);
+        // 回退到直接数据库查询
+        const pool = getDirectDbPool();
+        try {
+          const res = await pool.query<{ total_storage_bytes: string | number }>(
+            `SELECT COALESCE(SUM(size_bytes), 0) as total_storage_bytes 
+             FROM assets 
+             WHERE user_id = $1 AND deleted_at IS NULL`,
+            [userId]
+          );
+          if (res.rows.length > 0) {
+            const val = res.rows[0].total_storage_bytes;
+            usedBytes = typeof val === "string" ? parseInt(val, 10) : Number(val || 0);
+            if (!Number.isFinite(usedBytes) || usedBytes < 0) usedBytes = 0;
+          }
+        } catch (dbError: any) {
+          console.error("❌ Failed to calculate storage:", dbError);
+          usedBytes = 0;
+        } finally {
+          await pool.end().catch(() => {});
+        }
       }
-    } finally {
-      await pool.end().catch(() => {});
+    } else {
+      // 直接使用数据库连接
+      const pool = getDirectDbPool();
+      try {
+        const res = await pool.query<{ total_storage_bytes: string | number }>(
+          `SELECT COALESCE(SUM(size_bytes), 0) as total_storage_bytes 
+           FROM assets 
+           WHERE user_id = $1 AND deleted_at IS NULL`,
+          [userId]
+        );
+        if (res.rows.length > 0) {
+          const val = res.rows[0].total_storage_bytes;
+          usedBytes = typeof val === "string" ? parseInt(val, 10) : Number(val || 0);
+          if (!Number.isFinite(usedBytes) || usedBytes < 0) usedBytes = 0;
+        }
+      } catch (error: any) {
+        console.error("❌ Failed to calculate storage:", error);
+        usedBytes = 0;
+      } finally {
+        await pool.end().catch(() => {});
+      }
     }
 
     const limitBytes = 2 * 1024 * 1024 * 1024; // 2GB default

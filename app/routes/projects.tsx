@@ -195,6 +195,12 @@ export default function Projects() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerDirection, setDrawerDirection] = useState<"right" | "bottom">("right");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // 确保 Drawer 只在客户端渲染
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
     const update = () => {
@@ -443,9 +449,10 @@ export default function Projects() {
           </div>
         </div>
       </Modal>
-      {/* Edit Drawer */}
-      <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction={drawerDirection}>
-        <DrawerContent>
+      {/* Edit Drawer - 只在客户端渲染 */}
+      {isMounted && (
+        <Drawer open={drawerOpen} onOpenChange={setDrawerOpen} direction={drawerDirection}>
+          <DrawerContent>
           <div className="p-4 sm:p-6 h-full flex flex-col gap-4">
             <DrawerHeader>
               <DrawerTitle className="text-base">Edit project</DrawerTitle>
@@ -492,6 +499,7 @@ export default function Projects() {
           </div>
         </DrawerContent>
       </Drawer>
+      )}
 
       {/* Confirm delete */}
       <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>

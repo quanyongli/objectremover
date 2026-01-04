@@ -203,7 +203,7 @@ export default function TimelineEditor() {
         credentials: "include",
       });
       if (!res.ok) {
-        navigate("/projects");
+        navigate("/dashboard");
         return;
       }
       const j = await res.json();

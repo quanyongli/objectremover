@@ -17,10 +17,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   } catch {
     console.error("Failed to get session");
   }
-  // After successful OAuth callback, redirect to /projects
+  // After successful OAuth callback, redirect to /dashboard
   if (isCallback && (res.status === 200 || res.status === 302)) {
     const headers = new Headers(res.headers);
-    headers.set("Location", "/projects");
+    headers.set("Location", "/dashboard");
     return new Response(null, { status: 302, headers });
   }
   return res;

@@ -106,6 +106,37 @@ export async function loader({ request }: { request: Request }) {
     });
   }
 
+  // GET /api/assets/:id -> get asset info
+  const assetMatch = pathname.match(/^\/api\/assets\/([^/]+)$/);
+  if (assetMatch && request.method === "GET") {
+    const assetId = assetMatch[1];
+    const asset = await getAssetById(assetId);
+    if (!asset || asset.user_id !== userId) {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        asset: {
+          id: asset.id,
+          name: asset.original_name,
+          mediaUrlRemote: `/api/assets/${asset.id}/raw`,
+          fullUrl: `http://localhost:8000/media/${encodeURIComponent(asset.storage_key)}`,
+          width: asset.width,
+          height: asset.height,
+          durationInSeconds: asset.duration_seconds,
+          size: asset.size_bytes,
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+
   // GET /api/assets/:id/raw -> stream file with auth
   const rawMatch = pathname.match(/\/api\/assets\/([^/]+)\/raw$/);
   if (rawMatch && request.method === "GET") {
@@ -120,15 +151,36 @@ export async function loader({ request }: { request: Request }) {
     // Sanitize storage_key to prevent path traversal
     const sanitizedKey = path.basename(asset.storage_key);
     const filePath = path.resolve(OUT_DIR, sanitizedKey);
-    if (!filePath.startsWith(OUT_DIR) || !fs.existsSync(filePath)) {
-      return new Response(JSON.stringify({ error: "Not found" }), {
+    
+    // 添加详细的错误日志
+    if (!filePath.startsWith(OUT_DIR)) {
+      console.error(`❌ Path traversal attempt: ${filePath} not in ${OUT_DIR}`);
+      return new Response(JSON.stringify({ error: "Invalid path" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    
+    if (!fs.existsSync(filePath)) {
+      console.error(`❌ File not found: ${filePath} (storage_key: ${asset.storage_key})`);
+      return new Response(JSON.stringify({ error: "File not found", path: filePath }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
       });
     }
 
     // Support range requests for video/audio
-    const stat = fs.statSync(filePath);
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (error: any) {
+      console.error(`❌ Error reading file stats: ${filePath}`, error);
+      return new Response(JSON.stringify({ error: "File access error", message: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    
     const range = request.headers.get("range");
     const contentType =
       asset.mime_type || inferMediaTypeFromName(asset.original_name);
@@ -176,10 +228,24 @@ export async function action({ request }: { request: Request }) {
   const pathname = url.pathname;
   const method = request.method.toUpperCase();
 
-  const userId = await requireUserId(request);
-
-  // POST /api/assets/upload -> proxy file to existing 8000 upload and record DB
+  // POST /api/assets/upload -> save file directly and record DB
   if (pathname.endsWith("/api/assets/upload") && method === "POST") {
+    console.log(`📤 Upload request received`);
+    
+    let userId: string;
+    try {
+      userId = await requireUserId(request);
+      console.log(`✅ User authenticated: ${userId}`);
+    } catch (authError: any) {
+      console.error(`❌ Authentication failed:`, authError);
+      return new Response(
+        JSON.stringify({ error: "Unauthorized", detail: authError.message }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
     const width = Number(request.headers.get("x-media-width") || "") || null;
     const height = Number(request.headers.get("x-media-height") || "") || null;
     const duration =
@@ -187,80 +253,167 @@ export async function action({ request }: { request: Request }) {
     const originalNameHeader = request.headers.get("x-original-name") || "file";
     const projectIdHeader = request.headers.get("x-project-id");
 
+    console.log(`📋 Upload metadata:`, {
+      width,
+      height,
+      duration,
+      originalName: originalNameHeader,
+      projectId: projectIdHeader,
+    });
+
     // Parse incoming multipart form
     const incoming = await request.formData();
     const media = incoming.get("media");
     if (!(media instanceof Blob)) {
+      console.error(`❌ No file provided in form data`);
       return new Response(JSON.stringify({ error: "No file provided" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
-
-    // Reconstruct a new FormData and forward to 8000 so boundary is correct; faster and streams
-    const form = new FormData();
-    const filenameFor8000 = (media as {name?: string})?.name || originalNameHeader || "upload.bin";
-    form.append("media", media, filenameFor8000);
-
-    // Use HTTPS in production, HTTP only for local development
-    const uploadUrl = process.env.NODE_ENV === "production" 
-      ? process.env.UPLOAD_SERVICE_URL || "https://localhost:8000/upload"
-      : "http://localhost:8000/upload";
     
-    const forwardRes = await fetch(uploadUrl, {
-      method: "POST",
-      body: form,
-    });
+    console.log(`📁 File received: ${originalNameHeader}, size: ${media.size} bytes`);
 
-    if (!forwardRes.ok) {
-      const errText = await forwardRes.text().catch(() => "");
+    try {
+      // Try to forward to 8000 service first (if available)
+      const uploadUrl = process.env.NODE_ENV === "production" 
+        ? process.env.UPLOAD_SERVICE_URL || "https://localhost:8000/upload"
+        : "http://localhost:8000/upload";
+      
+      let filename: string;
+      let size: number;
+
+      try {
+        const form = new FormData();
+        const filenameFor8000 = (media as {name?: string})?.name || originalNameHeader || "upload.bin";
+        form.append("media", media, filenameFor8000);
+
+        console.log(`📤 Attempting to forward upload to ${uploadUrl}`);
+        const forwardRes = await fetch(uploadUrl, {
+          method: "POST",
+          body: form,
+          signal: AbortSignal.timeout(10000), // 10 second timeout
+        });
+
+        if (forwardRes.ok) {
+          const json = await forwardRes.json();
+          filename = json.filename;
+          size = json.size;
+          console.log(`✅ File forwarded successfully: ${filename}`);
+        } else {
+          const errorText = await forwardRes.text().catch(() => "");
+          console.warn(`⚠️ Forward failed (${forwardRes.status}): ${errorText}`);
+          throw new Error(`Upload service returned ${forwardRes.status}: ${errorText}`);
+        }
+      } catch (forwardError: any) {
+        console.warn(`⚠️ Forward error, using fallback:`, forwardError.message);
+        // Fallback: save file directly to out/ directory
+        try {
+          if (!fs.existsSync(OUT_DIR)) {
+            console.log(`📁 Creating out directory: ${OUT_DIR}`);
+            fs.mkdirSync(OUT_DIR, { recursive: true });
+          }
+
+          const timestamp = Date.now();
+          const ext = path.extname(originalNameHeader);
+          const baseName = path.basename(originalNameHeader, ext);
+          const sanitizedBase = baseName.replace(/[^a-zA-Z0-9_-]/g, '_');
+          filename = `${sanitizedBase}_${timestamp}${ext}`;
+          const filePath = path.resolve(OUT_DIR, filename);
+
+          console.log(`💾 Saving file directly to: ${filePath}`);
+          // Convert Blob to Buffer and save
+          const arrayBuffer = await media.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          fs.writeFileSync(filePath, buffer);
+          size = buffer.length;
+          console.log(`✅ File saved successfully: ${filename} (${size} bytes)`);
+        } catch (saveError: any) {
+          console.error(`❌ Failed to save file:`, saveError);
+          throw new Error(`Failed to save file: ${saveError.message}`);
+        }
+      }
+
+      const mime = inferMediaTypeFromName(
+        originalNameHeader,
+        "application/octet-stream"
+      );
+
+      console.log(`💾 Inserting asset record to database...`);
+      const record = await insertAsset({
+        userId,
+        projectId: projectIdHeader || null,
+        originalName: originalNameHeader,
+        storageKey: filename,
+        mimeType: mime,
+        sizeBytes: Number(size) || 0,
+        width,
+        height,
+        durationSeconds: duration,
+      });
+
+      console.log(`✅ Asset record created:`, {
+        id: record.id,
+        name: record.original_name,
+        storageKey: record.storage_key,
+      });
+
+      if (!record.id) {
+        console.error(`❌ Asset ID is missing in record:`, record);
+        throw new Error("Failed to create asset record: ID is missing");
+      }
+
+      const assetResponse = {
+        success: true,
+        asset: {
+          id: String(record.id), // 确保是字符串
+          name: record.original_name,
+          mediaUrlRemote: `/api/assets/${record.id}/raw`,
+          fullUrl: process.env.NODE_ENV === "production"
+            ? `${process.env.UPLOAD_SERVICE_URL?.replace('/upload', '') || 'https://localhost:8000'}/media/${encodeURIComponent(filename)}`
+            : `http://localhost:8000/media/${encodeURIComponent(filename)}`,
+          width: record.width,
+          height: record.height,
+          durationInSeconds: record.duration_seconds,
+          size: record.size_bytes,
+        },
+      };
+      
+      console.log(`✅ Upload completed, returning asset:`, JSON.stringify(assetResponse, null, 2));
+      
       return new Response(
-        JSON.stringify({ error: "Upload failed", detail: errText }),
+        JSON.stringify(assetResponse),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error: any) {
+      console.error("❌ Upload error:", error);
+      console.error("   Error message:", error.message);
+      console.error("   Error stack:", error.stack);
+      console.error("   User ID:", userId);
+      console.error("   File name:", originalNameHeader);
+      
+      // 返回更详细的错误信息（开发环境）
+      const errorDetail = process.env.NODE_ENV === "development" 
+        ? {
+            error: "Upload failed",
+            message: error.message || "Unknown error",
+            stack: error.stack,
+            userId,
+            fileName: originalNameHeader,
+          }
+        : {
+            error: "Upload failed",
+            message: error.message || "Unknown error",
+          };
+      
+      return new Response(
+        JSON.stringify(errorDetail),
         {
           status: 500,
           headers: { "Content-Type": "application/json" },
         }
       );
     }
-  
-    const json = await forwardRes.json();
-    const filename: string = json.filename;
-    const size: number = json.size;
-    const mime = inferMediaTypeFromName(
-      filenameFor8000,
-      "application/octet-stream"
-    );
-
-    const record = await insertAsset({
-      userId,
-      projectId: projectIdHeader || null,
-      originalName: filenameFor8000,
-      storageKey: filename,
-      mimeType: mime,
-      sizeBytes: Number(size) || 0,
-      width,
-      height,
-      durationSeconds: duration,
-    });
-
-    return new Response(
-      JSON.stringify({
-        success: true,
-        asset: {
-          id: record.id,
-          name: record.original_name,
-          mediaUrlRemote: `/api/assets/${record.id}/raw`,
-          fullUrl: `http://localhost:8000/media/${encodeURIComponent(
-            filename
-          )}`,
-          width: record.width,
-          height: record.height,
-          durationInSeconds: record.duration_seconds,
-          size: record.size_bytes,
-        },
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
   }
 
   // POST /api/assets/register -> register an already-uploaded file from out/
