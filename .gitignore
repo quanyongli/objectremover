@@ -70,5 +70,20 @@ idk.tsx
 idk.ts
 
 # Local documentation files (not committed)
-*.md
-!README.md
+AUTH_*.md
+BACKEND_*.md
+DATABASE_*.md
+DB_*.md
+DEPLOYMENT_*.md
+DIFY_*.md
+DNS_*.md
+FEATURE_*.md
+GOOGLE_*.md
+INSTALL_*.md
+MIGRATION_*.md
+NGROK_*.md
+OBJECT_*.md
+PROXY_*.md
+REUSABLE_*.md
+SUPABASE_*.md
+TECHNICAL_*.md
