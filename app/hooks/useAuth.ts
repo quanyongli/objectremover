@@ -83,7 +83,7 @@ export function useAuth(): UseAuthResult {
     // Fetch helpers return undefined on error (so we don't clear user)
     const fetchRestSession = async (): Promise<AuthUser | null | undefined> => {
       try {
-        const sessionUrl = apiUrl("/api/auth/session", false, true);
+        const sessionUrl = apiUrl("/api/auth/session", true);
         const res = await fetch(sessionUrl, {
           credentials: "include",
           headers: {

@@ -229,135 +229,21 @@ export function ChatBox({
       setTextareaHeight(36);
     }
 
-    try {
-      // Use the stored mentioned items to get their IDs
-      const mentionedScrubberIds = itemsToSend.map((item) => item.id);
-
-      // Build short chat history to give context to the backend
-      const history = messages.slice(-10).map((m) => ({
-        role: m.isUser ? "user" : "assistant",
-        content: m.content,
-        timestamp: m.timestamp,
-      }));
-
-      // Make API call to the backend
-      const response = await axios.post(apiUrl("/ai", true), {
-        message: messageContent,
-        mentioned_scrubber_ids: mentionedScrubberIds,
-        timeline_state: timelineState,
-        mediabin_items: mediaBinItems,
-        chat_history: history,
-      });
-
-      const functionCallResponse = response.data;
-      let aiResponseContent = "";
-
-      // Handle the function call based on function_name
-      if (functionCallResponse.function_call) {
-        const { function_call } = functionCallResponse;
-
-        try {
-          if (function_call.function_name === "LLMAddScrubberToTimeline") {
-            // Find the media item by ID
-            const mediaItem = mediaBinItems.find(
-              (item) => item.id === function_call.scrubber_id
-            );
-
-            if (!mediaItem) {
-              aiResponseContent = `❌ Error: Media item with ID "${function_call.scrubber_id}" not found in the media bin.`;
-            } else {
-              // Execute the function
-              llmAddScrubberToTimeline(
-                function_call.scrubber_id,
-                mediaBinItems,
-                function_call.track_id,
-                function_call.drop_left_px,
-                handleDropOnTrack
-              );
-
-              aiResponseContent = `✅ Successfully added "${mediaItem.name}" to ${function_call.track_id} at position ${function_call.drop_left_px}px.`;
-            }
-          } else if (function_call.function_name === "LLMMoveScrubber") {
-            // Execute move scrubber operation
-            llmMoveScrubber(
-              function_call.scrubber_id,
-              function_call.new_position_seconds,
-              function_call.new_track_number,
-              function_call.pixels_per_second,
-              timelineState,
-              handleUpdateScrubber
-            );
-
-            // Try to locate the scrubber name for a nicer message
-            const allScrubbers = timelineState.tracks.flatMap(
-              (t) => t.scrubbers
-            );
-            const moved = allScrubbers.find(
-              (s) => s.id === function_call.scrubber_id
-            );
-            const movedName = moved ? moved.name : function_call.scrubber_id;
-            aiResponseContent = `✅ Moved "${movedName}" to track ${function_call.new_track_number} at ${function_call.new_position_seconds}s.`;
-          } else if (function_call.function_name === "LLMAddScrubberByName") {
-            // Add media by name with defaults
-            llmAddScrubberByName(
-              function_call.scrubber_name,
-              mediaBinItems,
-              function_call.track_number,
-              function_call.position_seconds,
-              function_call.pixels_per_second ?? 100,
-              handleDropOnTrack
-            );
-
-            aiResponseContent = `✅ Added "${function_call.scrubber_name}" to track ${function_call.track_number} at ${function_call.position_seconds}s.`;
-          } else if (
-            function_call.function_name === "LLMDeleteScrubbersInTrack"
-          ) {
-            if (!handleDeleteScrubber) {
-              throw new Error("Delete handler is not available");
-            }
-            llmDeleteScrubbersInTrack(
-              function_call.track_number,
-              timelineState,
-              handleDeleteScrubber
-            );
-            aiResponseContent = `✅ Removed all scrubbers in track ${function_call.track_number}.`;
-          } else {
-            aiResponseContent = `❌ Unknown function: ${function_call.function_name}`;
-          }
-        } catch (error) {
-          aiResponseContent = `❌ Error executing function: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`;
-        }
-      } else if (functionCallResponse.assistant_message) {
-        aiResponseContent = functionCallResponse.assistant_message;
-      } else {
-        aiResponseContent =
-          "I understand your request, but I couldn't determine a specific action to take. Could you please be more specific?";
-      }
-
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: aiResponseContent,
-        isUser: false,
-        timestamp: new Date(),
-      };
-
-      onMessagesChange([...messages, userMessage, aiMessage]);
-    } catch (error) {
-      console.error("Error calling AI API:", error);
-
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        content: `❌ Sorry, I encountered an error while processing your request. Please try again.`,
-        isUser: false,
-        timestamp: new Date(),
-      };
-
-      onMessagesChange([...messages, userMessage, errorMessage]);
-    } finally {
-      setIsTyping(false);
-    }
+    // FastAPI backend has been removed - functionality migrated to Dify
+    // This ChatBox component is kept for UI compatibility but AI functionality is disabled
+    // TODO: Migrate ChatBox to use Dify API similar to ObjectSelectionChatBox
+    
+    setIsTyping(false);
+    const aiResponseContent = "⚠️ 此功能已迁移到 Dify AI。ChatBox 组件正在迁移中，请使用对象选择页面的 AI 助手。";
+    
+    // Add AI response message
+    const aiMessage: Message = {
+      id: Date.now().toString(),
+      content: aiResponseContent,
+      isUser: false,
+      timestamp: new Date(),
+    };
+    onMessagesChange([...messages, userMessage, aiMessage]);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {

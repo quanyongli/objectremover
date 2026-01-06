@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate, useLoaderData } from "react-router";
 import { Button } from "~/components/ui/button";
-import { ArrowLeft, Undo2, Redo2, Save } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, Save, Download } from "lucide-react";
 import { VideoControls } from "~/components/object-selection/VideoControls";
 import { toast } from "sonner";
 import { ActionPanel } from "~/components/object-selection/ActionPanel";
@@ -31,6 +31,8 @@ interface TaskProgress {
   percentage: number;
   status: string;
   taskId?: string;
+  outputUrl?: string;
+  outputUrls?: string[];
 }
 
 export async function loader({ request, params }: { request: Request; params: { assetId: string } }) {
@@ -142,6 +144,7 @@ export default function ObjectSelectionPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [keyFrames, setKeyFrames] = useState<Array<{ index: number; timestamp: number; url: string }>>([]);
   const [taskProgress, setTaskProgress] = useState<TaskProgress | null>(null);
+  const taskFinishedRef = useRef(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExtractingFrames, setIsExtractingFrames] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
@@ -388,8 +391,9 @@ export default function ObjectSelectionPage() {
           return;
         }
 
+        // 先设置操作结果，但不要立即设置 waitingForConfirmation
+        // 等遮罩生成完成后再设置，避免用户在遮罩生成前就确认
         setPendingOperationResult(result);
-        setWaitingForConfirmation(true);
         setIsProcessing(true);
 
         // 在上一条 AI 消息后面添加加载 icon（不创建新消息）
@@ -492,6 +496,14 @@ export default function ObjectSelectionPage() {
             // 设置 pending action
             setPendingAction(result.action);
             
+            // 确保所有必要的状态都已设置
+            console.log("✅ Mask generated successfully, state updated:", {
+              hasMaskData: true,
+              pendingAction: result.action,
+              hasPendingOperationResult: true,
+              textPrompt: result.text_prompt,
+            });
+            
             // 取消加载 icon，并添加新的确认消息（不替换原来的消息）
             setChatMessages((prev) => {
               // 找到最后一条 AI 消息并取消加载状态
@@ -514,11 +526,14 @@ export default function ObjectSelectionPage() {
               // 添加确认消息
               return [...updated, {
                 id: `confirm-${Date.now()}`,
-                content: "遮罩预览已生成并显示在画布上，请回复'确认'继续处理整个视频，或回复'取消'重新选择对象。",
+                content: "遮罩预览已生成并显示在画布上，请使用下方的按钮进行确认或重新选择。",
                 isUser: false,
                 timestamp: new Date(),
               }];
             });
+            
+            // 遮罩生成完成后，才设置 waitingForConfirmation，确保所有状态都已准备好
+            setIsProcessing(false);
             setWaitingForConfirmation(true);
           } else {
             throw new Error(data.error || "Invalid response");
@@ -578,7 +593,20 @@ export default function ObjectSelectionPage() {
 
   // 确认操作 - 启动处理任务（用户确认遮罩后）
   const handleConfirm = useCallback(async () => {
+    console.log("🔵 handleConfirm called", {
+      hasMaskData: !!maskData,
+      pendingAction,
+      hasPendingOperationResult: !!pendingOperationResult,
+      maskData,
+      pendingOperationResult,
+    });
+    
     if (!maskData || !pendingAction || !pendingOperationResult) {
+      console.error("❌ Missing required data for confirmation:", {
+        maskData: !!maskData,
+        pendingAction,
+        pendingOperationResult: !!pendingOperationResult,
+      });
       toast.error("请先选择对象并生成遮罩");
       return;
     }
@@ -597,6 +625,7 @@ export default function ObjectSelectionPage() {
     setChatMessages((prev) => [...prev, processingMessage]);
 
     try {
+      taskFinishedRef.current = false; // 重置完成标记，避免重复提示
       // 第一步：生成全视频遮罩
       const maskResponse = await fetch("/api/processing/generate-mask", {
         method: "POST",
@@ -629,6 +658,7 @@ export default function ObjectSelectionPage() {
           action: pendingAction,
           maskData: maskData_result.mask,
           textPrompt: pendingOperationResult.text_prompt,
+          videoUrl: asset.fullUrl || asset.mediaUrlRemote, // 传递原始视频 URL
         }),
       });
 
@@ -639,6 +669,7 @@ export default function ObjectSelectionPage() {
       const taskData = await taskResponse.json();
       if (taskData.success && taskData.taskId) {
         // 设置任务进度，useEffect 会自动开始轮询
+        taskFinishedRef.current = false;
         setTaskProgress({
           percentage: 0,
           status: "处理中...",
@@ -673,8 +704,17 @@ export default function ObjectSelectionPage() {
   // 轮询任务进度 - 使用 useEffect 管理
   useEffect(() => {
     if (!taskProgress?.taskId) return;
-
+    
+    // 重置完成标记
+    taskFinishedRef.current = false;
+    
     const interval = setInterval(async () => {
+      // 如果任务已完成，停止轮询
+      if (taskFinishedRef.current) {
+        clearInterval(interval);
+        return;
+      }
+
       try {
         const response = await fetch(`/api/processing/task/${taskProgress.taskId}`, {
           credentials: "include",
@@ -698,72 +738,160 @@ export default function ObjectSelectionPage() {
         const newStatus = data.message || data.status || "处理中...";
         const newPercentage = data.percentage || 0;
         
-        setTaskProgress({
+        setTaskProgress((prev) => prev ? {
+          ...prev,
           percentage: newPercentage,
           status: newStatus,
-          taskId: taskProgress.taskId,
-        });
+        } : null);
 
-        // 在对话框中更新进度
-        if (newPercentage > 0) {
-          const progressMessage: typeof chatMessages[0] = {
-            id: `progress-${Date.now()}`,
-            content: `${newStatus} (${Math.round(newPercentage)}%)`,
-            isUser: false,
-            timestamp: new Date(),
-          };
-          // 只保留最新的进度消息
+        // 在对话框中更新进度（只更新，不添加新消息）
+        if (newPercentage > 0 && newPercentage < 100) {
           setChatMessages((prev) => {
+            // 移除旧的进度消息，添加新的
             const filtered = prev.filter((m) => !m.id.startsWith("progress-"));
-            return [...filtered, progressMessage];
+            return [...filtered, {
+              id: `progress-${taskProgress.taskId}`,
+              content: `${newStatus} (${Math.round(newPercentage)}%)`,
+              isUser: false,
+              timestamp: new Date(),
+            }];
           });
         }
 
         if (data.status === "completed" || data.status === "failed") {
+          // 防止重复处理 - 使用更严格的检查
+          if (taskFinishedRef.current) {
+            clearInterval(interval);
+            return;
+          }
+          
+          // 立即标记为完成并停止轮询
+          taskFinishedRef.current = true;
           clearInterval(interval);
           setIsProcessing(false);
-          const finalMessage: typeof chatMessages[0] = {
-            id: Date.now().toString(),
-            content: data.status === "completed" 
-              ? "✅ 处理完成！视频已准备好下载。" 
-              : "❌ 处理失败，请重试",
-            isUser: false,
-            timestamp: new Date(),
-          };
-          setChatMessages((prev) => {
-            const filtered = prev.filter((m) => !m.id.startsWith("progress-"));
-            return [...filtered, finalMessage];
-          });
           
-          if (data.status === "completed") {
-            toast.success("处理完成！");
+          // 保存处理结果到状态
+          if (data.status === "completed" && data.outputUrl) {
+            // 检查是否是模拟模式的占位符 URL
+            const isMockPlaceholder = data.outputUrl.includes("commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny");
+            const isValidOutput = data.outputUrl && !isMockPlaceholder;
+            
+            setTaskProgress(prev => prev ? {
+              ...prev,
+              outputUrl: isValidOutput ? data.outputUrl : undefined,
+              outputUrls: isValidOutput ? (data.outputUrls || [data.outputUrl]) : undefined,
+              percentage: 100,
+              status: isValidOutput ? "处理完成" : "模拟模式（测试完成）"
+            } : null);
+            
+            // 检查是否已经添加过最终消息，使用精确的 ID 检查
+            const finalMessageId = `final-${taskProgress.taskId}`;
+            setChatMessages((prev) => {
+              // 检查是否已存在该任务的最终消息（使用 ID 而不是内容）
+              const hasFinalMessage = prev.some((m) => m.id === finalMessageId);
+              
+              if (hasFinalMessage) {
+                // 如果已存在，只移除进度消息，不重复添加
+                return prev.filter((m) => !m.id.startsWith("progress-"));
+              }
+              
+              // 移除进度消息，添加最终消息
+              const filtered = prev.filter((m) => !m.id.startsWith("progress-"));
+              return [...filtered, {
+                id: finalMessageId,
+                content: isValidOutput 
+                  ? "✅ 处理完成！视频已准备好下载。" 
+                  : "🎭 模拟模式测试完成（未实际处理视频）",
+                isUser: false,
+                timestamp: new Date(),
+              }];
+            });
+            
+            // 使用 toast 的 id 参数防止重复显示
+            if (isValidOutput) {
+              toast.success("处理完成！", { id: `toast-${taskProgress.taskId}` });
+            } else {
+              toast.info("模拟模式测试完成", { id: `toast-${taskProgress.taskId}` });
+            }
           } else {
-            toast.error("处理失败");
+            // 没有 outputUrl 或处理失败
+            const finalMessageId = `final-${taskProgress.taskId}`;
+            setChatMessages((prev) => {
+              // 检查是否已存在该任务的最终消息
+              const hasFinalMessage = prev.some((m) => m.id === finalMessageId);
+              
+              if (hasFinalMessage) {
+                return prev.filter((m) => !m.id.startsWith("progress-"));
+              }
+              
+              const filtered = prev.filter((m) => !m.id.startsWith("progress-"));
+              return [...filtered, {
+                id: finalMessageId,
+                content: data.status === "completed"
+                  ? "⚠️ 处理完成，但未找到输出视频"
+                  : "❌ 处理失败，请重试",
+                isUser: false,
+                timestamp: new Date(),
+              }];
+            });
+            
+            // 使用 toast 的 id 参数防止重复显示
+            if (data.status === "completed") {
+              toast.warning("处理完成，但未找到输出视频", { id: `toast-${taskProgress.taskId}` });
+            } else {
+              toast.error("处理失败", { id: `toast-${taskProgress.taskId}` });
+            }
           }
         }
       } catch (error) {
         console.error("Error polling task progress:", error);
         clearInterval(interval);
         setIsProcessing(false);
-        const errorMessage: typeof chatMessages[0] = {
-          id: Date.now().toString(),
-          content: "获取任务进度时出错",
-          isUser: false,
-          timestamp: new Date(),
-        };
-        setChatMessages((prev) => [...prev, errorMessage]);
+        setChatMessages((prev) => {
+          const hasErrorMessage = prev.some((m) => m.content.includes("获取任务进度时出错"));
+          if (hasErrorMessage) return prev;
+          
+          return [...prev, {
+            id: Date.now().toString(),
+            content: "获取任务进度时出错",
+            isUser: false,
+            timestamp: new Date(),
+          }];
+        });
       }
     }, 1000);
 
-    return () => clearInterval(interval);
-  }, [taskProgress?.taskId, chatMessages]);
+    return () => {
+      clearInterval(interval);
+      taskFinishedRef.current = false;
+    };
+  }, [taskProgress?.taskId]); // 移除 chatMessages 依赖，避免重复创建 interval
 
   // 处理下载
-  const handleDownload = useCallback(() => {
-    if (!taskProgress?.taskId) return;
-    // TODO: 实现下载功能
-    toast.info("下载功能开发中...");
-  }, [taskProgress]);
+  const handleDownload = useCallback(async () => {
+    if (!taskProgress?.outputUrl) {
+      toast.error("输出视频不可用，请等待处理完成");
+      return;
+    }
+
+    try {
+      // 创建下载链接
+      const link = document.createElement('a');
+      link.href = taskProgress.outputUrl;
+      link.download = `processed-video-${assetId}-${Date.now()}.mp4`;
+      link.target = '_blank';
+      
+      // 添加到 DOM，触发下载，然后移除
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      toast.success("开始下载视频");
+    } catch (error) {
+      console.error("下载失败:", error);
+      toast.error("下载失败，请重试");
+    }
+  }, [taskProgress, assetId]);
 
   // 处理帧选择
   const handleFrameSelect = useCallback(
@@ -968,6 +1096,7 @@ export default function ObjectSelectionPage() {
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   return (
+    // Header 固定，仅中间内容区域可滚动
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Header */}
       <header className="h-12 border-b flex items-center justify-between px-4 flex-shrink-0">
@@ -1014,10 +1143,10 @@ export default function ObjectSelectionPage() {
         </div>
       </header>
 
-      {/* Main Content: Left (Video + Timeline) + Right (Chat) */}
-      <div className="flex-1 flex overflow-hidden gap-4 px-4">
-        {/* Left Side: Video Canvas + Timeline */}
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
+      {/* Main Content: Left (Video + Timeline/Preview) + Right (Chat) */}
+      <div className="flex-1 flex overflow-x-hidden overflow-y-auto gap-4 px-4">
+        {/* Left Side: Video Canvas + Timeline/Preview */}
+        <div className="w-2/3 flex flex-col overflow-hidden min-h-0 gap-4">
           {/* Video Canvas - 上方 */}
           <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden min-h-0 rounded-lg">
             <div
@@ -1111,25 +1240,53 @@ export default function ObjectSelectionPage() {
             </div>
           </div>
 
-          {/* Timeline - 下方，固定高度，始终显示 */}
+          {/* Timeline 或处理后的视频预览 - 下方，固定高度 */}
           <div className="flex-shrink-0">
-            {keyFrames.length > 0 ? (
-              <FrameTimeline
-                frames={keyFrames}
-                selectedFrameIndex={selectedFrameIndex}
-                currentTime={currentTime}
-                duration={asset.durationInSeconds}
-                pixelsPerSecond={pixelsPerSecond}
-                onFrameSelect={handleFrameSelect}
-                onTimelineSeek={handleTimelineSeek}
-                onZoomChange={handleZoomChange}
-              />
-            ) : (
-              <div className="h-48 border-t bg-muted/30 flex items-center justify-center">
-                <div className="text-sm text-muted-foreground">
-                  {isExtractingFrames ? "正在提取关键帧..." : "等待视频加载..."}
+            {taskProgress?.outputUrl ? (
+              // 处理完成后显示视频预览，尺寸与上方 canvas 保持一致视觉（限制最大高）
+              <div className="border-t bg-muted/30 rounded-lg overflow-hidden flex flex-col">
+                <div className="px-4 py-2 border-b bg-background">
+                  <h3 className="text-sm font-medium">处理后的视频预览</h3>
+                </div>
+                <div className="bg-black aspect-video w-full max-h-[480px] flex items-center justify-center">
+                  <video
+                    src={taskProgress.outputUrl}
+                    controls
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                <div className="px-4 py-2 border-t bg-background flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">处理完成，可以下载视频</span>
+                  <Button
+                    onClick={handleDownload}
+                    size="sm"
+                    variant="default"
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    下载视频
+                  </Button>
                 </div>
               </div>
+            ) : (
+              // 处理中显示 Timeline
+              keyFrames.length > 0 ? (
+                <FrameTimeline
+                  frames={keyFrames}
+                  selectedFrameIndex={selectedFrameIndex}
+                  currentTime={currentTime}
+                  duration={asset.durationInSeconds}
+                  pixelsPerSecond={pixelsPerSecond}
+                  onFrameSelect={handleFrameSelect}
+                  onTimelineSeek={handleTimelineSeek}
+                  onZoomChange={handleZoomChange}
+                />
+              ) : (
+                <div className="h-48 border-t bg-muted/30 flex items-center justify-center">
+                  <div className="text-sm text-muted-foreground">
+                    {isExtractingFrames ? "正在提取关键帧..." : "等待视频加载..."}
+                  </div>
+                </div>
+              )
             )}
           </div>
         </div>

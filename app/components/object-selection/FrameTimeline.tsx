@@ -40,6 +40,7 @@ export function FrameTimeline({
   const [scrollLeft, setScrollLeft] = React.useState(0);
   const [rulerPositionPx, setRulerPositionPx] = React.useState(0);
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
+  const [containerWidthPx, setContainerWidthPx] = useState(0);
   
   // Calculate actual pixels per second based on zoom
   const pixelsPerSecond = basePixelsPerSecond * zoomLevel;
@@ -91,6 +92,18 @@ export function FrameTimeline({
       setScrollLeft(containerRef.current.scrollLeft);
     }
   };
+
+  // 记录容器宽度，确保初始缩略图填满可视区域
+  useEffect(() => {
+    const updateContainerWidth = () => {
+      if (containerRef.current) {
+        setContainerWidthPx(containerRef.current.clientWidth);
+      }
+    };
+    updateContainerWidth();
+    window.addEventListener("resize", updateContainerWidth);
+    return () => window.removeEventListener("resize", updateContainerWidth);
+  }, [frames.length, timelineWidth]);
 
   // 缩放功能
   const handleZoomIn = useCallback(() => {
@@ -209,14 +222,14 @@ export function FrameTimeline({
         {/* 缩略图容器，添加 padding 以对齐标尺，确保从时间0开始显示 */}
         <div
           className="relative h-full px-4"
-          style={{ width: `${timelineWidth + 32}px`, minHeight: "100%" }}
+          style={{ width: `${Math.max(timelineWidth, containerWidthPx || timelineWidth) + 32}px`, minHeight: "100%" }}
         >
           {frames.map((frame, index) => {
-            // 动态计算帧宽度：根据视频总时长和帧数量
-            // 例如：5秒视频，11张缩略图，每张宽度 = (5 * pixelsPerSecond) / 11
-            const frameWidth = timelineWidth / frames.length;
-            // 计算帧的左边位置：根据时间戳计算，加上 padding 以对齐到时间轴刻度
-            const frameLeft = frame.timestamp * pixelsPerSecond + 16; // 加上 padding (px-4 = 16px)
+            // 计算每个缩略图的宽度，使总宽度等于时间轴宽度（或容器宽度）
+            const effectiveWidth = Math.max(timelineWidth, containerWidthPx || timelineWidth);
+            const frameWidth = effectiveWidth / frames.length;
+            // 等分定位，使缩略图填满整个时间轴
+            const frameLeft = index * frameWidth + 16; // 加上 padding (px-4 = 16px)
             const isSelected = selectedFrameIndex === index;
             const isCurrentFrame =
               currentTime >= frame.timestamp &&
@@ -225,24 +238,25 @@ export function FrameTimeline({
             return (
               <div
                 key={index}
-                className={`absolute flex-shrink-0 cursor-pointer rounded border-2 transition-all ${
+                className={`absolute flex-shrink-0 cursor-pointer transition-all ${
                   isSelected
-                    ? "border-primary ring-2 ring-primary/20"
-                    : "border-border hover:border-primary/50"
+                    ? "ring-2 ring-primary/20"
+                    : ""
                 }`}
                 onClick={() => onFrameSelect(index)}
                 style={{
                   left: `${frameLeft}px`,
                   width: `${frameWidth}px`,
-                  height: "53px", // 再缩小三分之一：80px * 2/3 ≈ 53px
+                  height: "53px",
                   top: "50%",
-                  transform: "translateY(-50%)",
+                  transform: `translateY(-50%) scale(${isSelected ? 1.33 : 1})`,
+                  transformOrigin: "center",
                 }}
               >
                 <img
                   src={frame.url}
                   alt={`Frame ${index}`}
-                  className="w-full h-full object-cover rounded"
+                  className="w-full h-full object-cover"
                 />
               </div>
             );

@@ -36,10 +36,9 @@ docker compose up
 pnpm i
 pnpm run dev (frontend)
 pnpm dlx tsx app/videorender/videorender.ts (backend)
-uv run backend/main.py
 flip `isProduction` to `false` in `/app/utils/api.ts`
 
-You will also require a GEMINI_API_KEY if you want to use AI.
+You will also require a DIFY_API_KEY if you want to use AI.
 ```
 
 ## 📃TODO

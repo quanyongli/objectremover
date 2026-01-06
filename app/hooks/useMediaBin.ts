@@ -186,7 +186,7 @@ export const useMediaBin = (
         const url = projectId
           ? `/api/assets?projectId=${encodeURIComponent(projectId)}`
           : "/api/assets";
-        const res = await fetch(apiUrl(url, false, true), {
+        const res = await fetch(apiUrl(url, true), {
           credentials: "include",
         });
         if (!res.ok) return;
@@ -403,7 +403,7 @@ export const useMediaBin = (
       }
       // Call authenticated delete by asset id
       const assetId = item.id;
-      const res = await fetch(apiUrl(`/api/assets/${assetId}`, false, true), {
+      const res = await fetch(apiUrl(`/api/assets/${assetId}`, true), {
         method: "DELETE",
         credentials: "include",
       });
@@ -438,7 +438,7 @@ export const useMediaBin = (
 
       // Clone via authenticated API (server will copy within out/ and record)
       const res = await fetch(
-        apiUrl(`/api/assets/${videoItem.id}/clone`, false, true),
+        apiUrl(`/api/assets/${videoItem.id}/clone`, true),
         {
           method: "POST",
           credentials: "include",
