@@ -10,7 +10,9 @@ import { MaskOverlay } from "~/components/object-selection/MaskOverlay";
 import { PIXELS_PER_SECOND } from "~/components/timeline/types";
 import { useObjectSelection, type ClickPoint, type MaskData } from "~/hooks/useObjectSelection";
 import { ObjectSelectionChatBox } from "~/components/object-selection/ObjectSelectionChatBox";
+import { LoadingOverlay } from "~/components/object-selection/LoadingOverlay";
 import type { DifyOperationResult } from "~/lib/dify.api";
+// 遮罩编辑相关工具函数已移除，仅保留通过 prompt 生成遮罩的功能
 // Project save/load is handled via API
 import type { TimelineState } from "~/components/timeline/types";
 
@@ -144,6 +146,8 @@ export default function ObjectSelectionPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [keyFrames, setKeyFrames] = useState<Array<{ index: number; timestamp: number; url: string }>>([]);
   const [taskProgress, setTaskProgress] = useState<TaskProgress | null>(null);
+  const [maskVideoUrl, setMaskVideoUrl] = useState<string | null>(null); // 全视频遮罩视频 URL
+  const [isGeneratingMask, setIsGeneratingMask] = useState(false); // 是否正在生成全视频遮罩
   const taskFinishedRef = useRef(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExtractingFrames, setIsExtractingFrames] = useState(false);
@@ -177,6 +181,8 @@ export default function ObjectSelectionPage() {
     canUndo,
     canRedo,
     snapshotState,
+    setPendingMaskOperation,
+    setIsMaskEditMode,
   } = useObjectSelection();
 
   // Alias for easier access
@@ -184,6 +190,8 @@ export default function ObjectSelectionPage() {
   const selectedObject = selectionState.selectedObject;
   const maskData = selectionState.maskData;
   const pendingAction = selectionState.pendingAction;
+  const pendingMaskOperation = selectionState.pendingMaskOperation;
+  const isMaskEditMode = selectionState.isMaskEditMode;
 
   // 提取关键帧（每2秒一帧）
   const extractKeyFrames = useCallback(async () => {
@@ -201,22 +209,42 @@ export default function ObjectSelectionPage() {
     const frames: Array<{ index: number; timestamp: number; url: string }> = [];
     const frameInterval = 0.2; // 每0.2秒一帧（每秒5张，更密集的缩略图）
     
-    // 等待视频元数据加载
-    if (isNaN(video.duration) || video.duration === 0) {
+    // 等待视频元数据加载，确保视频尺寸可用
+    if (isNaN(video.duration) || video.duration === 0 || video.videoWidth === 0 || video.videoHeight === 0) {
       await new Promise((resolve) => {
         const onLoadedMetadata = () => {
           video.removeEventListener("loadedmetadata", onLoadedMetadata);
           resolve(null);
         };
         video.addEventListener("loadedmetadata", onLoadedMetadata);
+        // 如果已经加载了元数据，立即resolve
+        if (video.readyState >= 2 && video.duration > 0 && video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve(null);
+        }
       });
     }
 
+    // 再次检查视频尺寸，如果仍然为0，等待一段时间
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.warn("Video dimensions not available, waiting...");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      // 如果仍然为0，使用默认值或从asset获取
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+        console.warn("Using asset dimensions as fallback");
+        canvas.width = asset.width || 1920;
+        canvas.height = asset.height || 1080;
+      } else {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+    } else {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+
     // 计算总帧数：确保覆盖整个视频时长
-    // 例如：5秒视频 = 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0 (11帧)
+    // 例如：6秒视频 = 0, 0.2, 0.4, ..., 5.8, 6.0 (31帧)
     const totalFrames = Math.floor(video.duration / frameInterval) + 1;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
 
     // 保存原始时间
     const originalTime = video.currentTime;
@@ -330,13 +358,16 @@ export default function ObjectSelectionPage() {
     }
   }, [isPlaying]);
 
-  // 处理视频时间更新
+  // 处理视频时间更新和播放完成
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const handleTimeUpdate = () => {
-      setCurrentTime(video.currentTime);
+      // 如果正在生成遮罩，不更新 currentTime（由动画控制）
+      if (!isGeneratingMask) {
+        setCurrentTime(video.currentTime);
+      }
     };
 
     const handleSeeked = () => {
@@ -344,13 +375,81 @@ export default function ObjectSelectionPage() {
       setCurrentTime(video.currentTime);
     };
 
+    const handleEnded = () => {
+      // 视频播放完成时，停止播放状态并更新到最后一帧
+      setIsPlaying(false);
+      // 确保时间设置为视频时长，但不超过
+      const finalTime = Math.min(video.duration, video.duration);
+      setCurrentTime(finalTime);
+      // 如果有关键帧，选择最后一帧
+      if (keyFrames.length > 0) {
+        const lastFrameIndex = keyFrames.length - 1;
+        setSelectedFrameIndex(lastFrameIndex);
+        // 确保视频跳转到最后一帧的时间戳
+        const lastFrame = keyFrames[lastFrameIndex];
+        if (lastFrame) {
+          video.currentTime = lastFrame.timestamp;
+        }
+      }
+    };
+
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("ended", handleEnded);
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("ended", handleEnded);
     };
-  }, []);
+  }, [keyFrames, isGeneratingMask]);
+
+  // 当正在生成全视频遮罩时，让 Timeline 游标缓慢从左向右滚动，然后从右滚回来，如此循环
+  useEffect(() => {
+    if (!isGeneratingMask || !asset.durationInSeconds) return;
+
+    let animationId: number;
+    let startTime = Date.now();
+    const duration = asset.durationInSeconds;
+    const animationDuration = 6000; // 6秒一个来回周期（从左到右3秒，从右到左3秒）
+
+    const animate = () => {
+      if (!isGeneratingMask) {
+        // 如果不再生成遮罩，停止动画
+        if (animationId) {
+          cancelAnimationFrame(animationId);
+        }
+        return;
+      }
+
+      const elapsed = (Date.now() - startTime) % animationDuration;
+      const progress = elapsed / animationDuration;
+      
+      // 让游标从左到右（0到1），然后从右到左（1到0），循环
+      let normalizedProgress: number;
+      if (progress < 0.5) {
+        // 前半段：从左到右（0 到 1）
+        normalizedProgress = progress * 2; // 0 到 1
+      } else {
+        // 后半段：从右到左（1 到 0）
+        normalizedProgress = 1 - (progress - 0.5) * 2; // 1 到 0
+      }
+      
+      const animatedTime = normalizedProgress * duration;
+      
+      // 只更新 currentTime 状态，不影响 videoRef.current.currentTime（保持 canvas 不变）
+      setCurrentTime(animatedTime);
+      
+      animationId = requestAnimationFrame(animate);
+    };
+
+    animationId = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationId) {
+        cancelAnimationFrame(animationId);
+      }
+    };
+  }, [isGeneratingMask, asset.durationInSeconds]);
 
 
   // 处理 Dify AI 返回的操作结果
@@ -487,14 +586,22 @@ export default function ObjectSelectionPage() {
             }
             
             snapshotState();
+            const frame = keyFrames[selectedFrameIndex];
             setMaskData({
               preview: previewUrl,
               maskUrl: data.mask.maskUrl,
               predictionId: data.mask.predictionId,
+              // 初始化 visualPromptPoints（如果是第一次生成）
+              visualPromptPoints: [],
+              textPrompt: result.text_prompt,
+              imageWidth: asset.width || 1920,
+              imageHeight: asset.height || 1080,
             });
             
             // 设置 pending action
             setPendingAction(result.action);
+            
+            // 遮罩编辑功能已废弃，不再自动进入编辑模式
             
             // 确保所有必要的状态都已设置
             console.log("✅ Mask generated successfully, state updated:", {
@@ -612,6 +719,7 @@ export default function ObjectSelectionPage() {
     }
 
     setIsProcessing(true);
+    setIsGeneratingMask(true); // 开始生成全视频遮罩
     setTaskProgress({ percentage: 0, status: "正在生成全视频遮罩..." });
     setWaitingForConfirmation(false);
 
@@ -646,6 +754,30 @@ export default function ObjectSelectionPage() {
       const maskData_result = await maskResponse.json();
       if (!maskData_result.success || !maskData_result.mask) {
         throw new Error("Failed to generate full video mask");
+      }
+
+      // 保存遮罩视频 URL，用于在 canvas 中显示
+      const maskVideo = maskData_result.mask.maskVideoUrl || maskData_result.mask.preview;
+      if (maskVideo) {
+        setIsGeneratingMask(false); // 遮罩生成完成，停止游标动画
+        setMaskVideoUrl(maskVideo);
+        
+        // 在 canvas 中加载遮罩视频并自动播放
+        // 使用 setTimeout 确保状态更新完成后再加载视频
+        setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.src = maskVideo;
+            videoRef.current.load();
+            // 重置 currentTime 到 0，但不自动播放，等待用户点击播放
+            setCurrentTime(0);
+            // 不自动播放，让用户手动控制
+            // videoRef.current.play().catch((error) => {
+            //   console.error("❌ Failed to play mask video:", error);
+            // });
+          }
+        }, 100);
+      } else {
+        setIsGeneratingMask(false);
       }
 
       // 第二步：启动处理任务
@@ -899,11 +1031,34 @@ export default function ObjectSelectionPage() {
       const frame = keyFrames[index];
       if (!frame || !videoRef.current) return;
 
-      videoRef.current.currentTime = frame.timestamp;
-      snapshotState();
-      setSelectedFrameIndex(index);
+      const video = videoRef.current;
+      
+      // 暂停播放以确保显示正确的帧
+      if (isPlaying) {
+        video.pause();
+        setIsPlaying(false);
+      }
+      
+      // 设置视频时间并等待跳转完成
+      video.currentTime = frame.timestamp;
+      
+      // 等待视频跳转完成后再更新状态
+      const handleSeeked = () => {
+        video.removeEventListener("seeked", handleSeeked);
+        // 更新当前时间状态，确保竖线位置正确
+        setCurrentTime(frame.timestamp);
+        snapshotState();
+        setSelectedFrameIndex(index);
+      };
+      
+      // 如果视频已经跳转到目标时间，立即触发
+      if (Math.abs(video.currentTime - frame.timestamp) < 0.1) {
+        handleSeeked();
+      } else {
+        video.addEventListener("seeked", handleSeeked, { once: true });
+      }
     },
-    [keyFrames, snapshotState, setSelectedFrameIndex]
+    [keyFrames, snapshotState, setSelectedFrameIndex, isPlaying]
   );
 
   // 处理时间轴跳转
@@ -1043,18 +1198,24 @@ export default function ObjectSelectionPage() {
     setPanY(0);
   }, []);
 
+  // 遮罩编辑功能已废弃，仅通过 prompt 输入生成遮罩
+  const maskImageRef = useRef<HTMLImageElement>(null);
+
   // 处理拖拽开始
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!isZoomed) return;
-    // 如果点击的是视频本身（用于选择对象），不触发拖拽
-    if ((e.target as HTMLElement).tagName === "VIDEO" && selectedFrameIndex !== null) {
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-    setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
-  }, [isZoomed, panX, panY, selectedFrameIndex]);
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!isZoomed) return;
+      // 如果点击的是视频本身（用于选择对象），不触发拖拽
+      if ((e.target as HTMLElement).tagName === "VIDEO" && selectedFrameIndex !== null) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
+    },
+    [isZoomed, panX, panY, selectedFrameIndex]
+  );
 
   // 处理拖拽移动
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -1144,13 +1305,19 @@ export default function ObjectSelectionPage() {
       </header>
 
       {/* Main Content: Left (Video + Timeline/Preview) + Right (Chat) */}
-      <div className="flex-1 flex overflow-x-hidden overflow-y-auto gap-4 px-4">
+      <div className="flex-1 flex overflow-x-hidden gap-4 px-4 min-h-0">
         {/* Left Side: Video Canvas + Timeline/Preview */}
-        <div className="w-2/3 flex flex-col overflow-hidden min-h-0 gap-4">
+        <div 
+          className="w-2/3 flex flex-col overflow-y-auto min-h-0 gap-4 py-4"
+          style={{
+            scrollbarWidth: 'thin',
+            scrollbarColor: '#9ca3af #e5e7eb',
+          }}
+        >
           {/* Video Canvas - 上方 */}
-          <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden min-h-0 rounded-lg">
+          <div className="flex-1 relative bg-black flex items-start justify-center overflow-hidden min-h-0 rounded-lg pt-4">
             <div
-              className="relative w-full h-full flex items-center justify-center"
+              className="relative w-full h-full flex items-start justify-center"
               onMouseDown={handleMouseDown}
               style={{
                 cursor: isZoomed ? (isDragging ? "grabbing" : "grab") : "default",
@@ -1160,8 +1327,9 @@ export default function ObjectSelectionPage() {
               {/* 视频元素始终存在，用于播放控制 */}
               <video
                 ref={videoRef}
-                src={asset.mediaUrlRemote}
-                className={maskData && selectedFrameIndex !== null ? "hidden" : "max-w-full max-h-full"}
+                src={maskVideoUrl || asset.mediaUrlRemote}
+                autoPlay={false}
+                className={maskData && selectedFrameIndex !== null && !maskVideoUrl ? "hidden" : "max-w-full max-h-full"}
                 style={{
                   transform: `scale(${zoomScale}) translate(${panX / zoomScale}px, ${panY / zoomScale}px)`,
                   transition: isDragging ? "none" : "transform 0.1s ease-out",
@@ -1171,6 +1339,8 @@ export default function ObjectSelectionPage() {
                   // 确保视频元数据加载后触发关键帧提取
                   if (videoRef.current && keyFrames.length === 0 && !isExtractingFrames) {
                     const video = videoRef.current;
+                    // 确保视频不自动播放
+                    video.pause();
                     if (video.readyState >= 2 && video.duration > 0 && !isNaN(video.duration)) {
                       console.log("✅ Triggering extractKeyFrames from onLoadedMetadata");
                       extractKeyFrames();
@@ -1181,6 +1351,10 @@ export default function ObjectSelectionPage() {
                 }}
                 onCanPlay={() => {
                   console.log("✅ Video can play, readyState:", videoRef.current?.readyState, "duration:", videoRef.current?.duration);
+                  // 确保视频不自动播放
+                  if (videoRef.current) {
+                    videoRef.current.pause();
+                  }
                   // 视频可以播放时，如果还没有提取关键帧，则提取
                   if (videoRef.current && keyFrames.length === 0 && !isExtractingFrames) {
                     const video = videoRef.current;
@@ -1194,6 +1368,10 @@ export default function ObjectSelectionPage() {
                 }}
                 onLoadedData={() => {
                   console.log("✅ Video data loaded, readyState:", videoRef.current?.readyState);
+                  // 确保视频不自动播放
+                  if (videoRef.current) {
+                    videoRef.current.pause();
+                  }
                   if (videoRef.current && keyFrames.length === 0 && !isExtractingFrames) {
                     const video = videoRef.current;
                     if (video.readyState >= 2 && video.duration > 0 && !isNaN(video.duration)) {
@@ -1217,6 +1395,7 @@ export default function ObjectSelectionPage() {
               {/* 如果有遮罩，显示遮罩图像（覆盖在视频上方） */}
               {maskData && selectedFrameIndex !== null && (
                 <img
+                  ref={maskImageRef}
                   src={maskData.preview}
                   alt="Mask preview"
                   className="absolute max-w-full max-h-full object-contain pointer-events-none"
@@ -1237,6 +1416,18 @@ export default function ObjectSelectionPage() {
                 onZoom={handleZoom}
                 onReset={handleReset}
               />
+
+              {/* 加载等待框 - 当生成遮罩或处理视频时显示 */}
+              {(isGeneratingMask || isProcessing) && (
+                <LoadingOverlay
+                  message={
+                    isGeneratingMask
+                      ? "正在生成全视频遮罩..."
+                      : taskProgress?.status || "正在处理中..."
+                  }
+                />
+              )}
+
             </div>
           </div>
 
@@ -1248,11 +1439,11 @@ export default function ObjectSelectionPage() {
                 <div className="px-4 py-2 border-b bg-background">
                   <h3 className="text-sm font-medium">处理后的视频预览</h3>
                 </div>
-                <div className="bg-black aspect-video w-full max-h-[480px] flex items-center justify-center">
+                <div className="bg-black aspect-video w-full max-h-[400px] flex items-center justify-center">
                   <video
                     src={taskProgress.outputUrl}
                     controls
-                    className="w-full h-full object-contain"
+                    className="w-full h-full object-contain max-h-full"
                   />
                 </div>
                 <div className="px-4 py-2 border-t bg-background flex items-center justify-between">
@@ -1298,6 +1489,8 @@ export default function ObjectSelectionPage() {
           currentFrameImageUrl={
             selectedFrameIndex !== null && keyFrames[selectedFrameIndex]
               ? keyFrames[selectedFrameIndex].url
+              : keyFrames.length > 0
+              ? keyFrames[0].url
               : undefined
           }
           onOperationResult={handleDifyOperationResult}
