@@ -92,8 +92,8 @@ function getMockPredictionStatus(predictionId: string): any {
 
   if (prediction.status === "succeeded" && prediction.output) {
     result.output = prediction.output;
-  } else if (prediction.status === "failed" && prediction.error) {
-    result.error = prediction.error;
+  } else if ((prediction as any).status === "failed" && (prediction as any).error) {
+    result.error = (prediction as any).error;
   }
 
   return result;
@@ -144,13 +144,24 @@ export async function action({ request, params }: ActionFunctionArgs) {
     // 处理 /api/processing/generate-mask
     if (path.includes("/generate-mask")) {
       const body = await request.json();
-      const { textPrompt, videoUrl, frameImage, isSingleFrame = false } = body;
+      const { 
+        textPrompt, 
+        videoUrl, 
+        frameImage, 
+        isSingleFrame = false,
+        visualPromptPoints, // 新增：视觉提示点数组
+        negativePrompt, // 新增：排除提示
+        imageWidth, // 新增：图片宽度
+        imageHeight, // 新增：图片高度
+      } = body;
 
       console.log("🎭 Generating mask with SAM3:", {
         textPrompt,
         videoUrl,
         isSingleFrame,
         hasFrameImage: !!frameImage,
+        visualPromptPointsCount: visualPromptPoints?.length || 0,
+        negativePrompt,
       });
 
       // 根据模拟模式选择调用真实 API 或模拟 API
@@ -183,7 +194,11 @@ export async function action({ request, params }: ActionFunctionArgs) {
         // 根据 https://replicate.com/lucataco/sam3-video
         // SAM3 只接受 video 字段（即使是图片 URL 也要用 video）
         const replicateInput: any = {
-        prompt: textPrompt || "object", // 使用 prompt 而不是 text_prompt
+        // 提示策略：
+        // - 有 textPrompt 用 textPrompt
+        // - 否则回落一个最弱语义 "object"，避免 SAM3 报 No prompts available
+        //   由于我们在前端已清空语义并仅使用正例点锁定实例，弱语义不会重新召回所有对象
+        prompt: textPrompt && textPrompt.trim() !== "" ? textPrompt : "object", // 使用 prompt 而不是 text_prompt
         // 单帧预览：mask_only: false 返回带颜色的遮罩层用于可视化确认
         // 全视频遮罩：mask_only: true 返回纯遮罩给 ProPainter
         mask_only: !isSingleFrame, // 单帧为 false（可视化），全视频为 true（纯遮罩）
@@ -201,6 +216,35 @@ export async function action({ request, params }: ActionFunctionArgs) {
             JSON.stringify({ error: "Either frameImage or videoUrl is required" }),
             { status: 400, headers: { "Content-Type": "application/json" } }
           );
+        }
+
+        // 添加 negative_prompt（如果提供）
+        if (negativePrompt) {
+          replicateInput.negative_prompt = negativePrompt;
+          console.log("📌 Using negative_prompt:", negativePrompt);
+        }
+
+        // 添加 visual_prompt（如果提供点击点）
+        if (visualPromptPoints && visualPromptPoints.length > 0) {
+          try {
+            const points = visualPromptPoints.map((p: any) => [p.x, p.y]);
+            // 注意：使用 ?? 而不是 ||，因为 label: 0 是有效的（排除点）
+            const labels = visualPromptPoints.map((p: any) => p.label !== undefined ? p.label : 1);
+            // 单帧预览场景只有一帧，frame_index 必须为 0，否则 SAM3 会报 "No prompts available"
+            const frameIndex = isSingleFrame ? 0 : (visualPromptPoints[0]?.frameIndex ?? 0);
+            
+            const visualPromptJson = JSON.stringify({
+              points,
+              labels,
+              frame_index: frameIndex,
+            });
+            
+            replicateInput.visual_prompt = visualPromptJson;
+            console.log("📌 Using visual_prompt:", visualPromptJson);
+          } catch (error) {
+            console.warn("⚠️ Failed to build visual_prompt:", error);
+            // 如果构建失败，继续使用 text prompt
+          }
         }
 
         console.log("📤 Calling Replicate SAM3 API...");
@@ -279,6 +323,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
         }
 
         if (predictionResult.status !== "succeeded") {
+          console.error("❌ SAM3 prediction failed:", predictionResult);
           throw new Error(
             `Prediction failed or timed out: ${predictionResult.status}`
           );
@@ -305,14 +350,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
             { headers: { "Content-Type": "application/json" } }
           );
         } else {
-          // 全视频遮罩：mask_only: true，返回纯遮罩视频给 ProPainter
+          // 全视频遮罩：mask_only: false，返回带颜色的遮罩视频（ProPainter 可以处理）
           return new Response(
             JSON.stringify({
               success: true,
               mask: {
-                preview: output, // 纯遮罩视频 URL
+                preview: output, // 遮罩视频 URL（带颜色）
                 maskUrl: output,
-                maskVideoUrl: output, // 纯遮罩视频 URL，用于 ProPainter
+                maskVideoUrl: output, // 遮罩视频 URL，用于 ProPainter
                 predictionId: prediction.id,
                 isVideo: true,
               },
@@ -369,10 +414,10 @@ export async function action({ request, params }: ActionFunctionArgs) {
       });
 
       // 构建 ProPainter 输入参数
-      // SAM3 已返回纯遮罩（mask_only: true），可直接用于 ProPainter
+      // SAM3 已返回遮罩视频（mask_only: false，带颜色），ProPainter 可以处理
       const propainterInput: any = {
         video: inputVideoUrl,
-        mask: maskUrl, // 纯遮罩视频 URL（来自 SAM3，mask_only: true）
+        mask: maskUrl, // 遮罩视频 URL（来自 SAM3，mask_only: false，带颜色）
         mode: "video_inpainting", // 对象删除使用 video_inpainting 模式
         fp16: true, // 使用半精度以降低内存使用和成本
         resize_ratio: 0.5, // 缩放到 50% 以优化处理速度和效果

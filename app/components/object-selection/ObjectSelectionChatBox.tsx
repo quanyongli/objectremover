@@ -84,17 +84,8 @@ export function ObjectSelectionChatBox({
       return;
     }
 
-    // 如果不在等待确认状态，需要检查是否有当前帧
-    if (!waitingForConfirmation && !currentFrameImageUrl) {
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        content: "请先在时间轴上选择一帧视频",
-        isUser: false,
-        timestamp: new Date(),
-      };
-      onMessagesChange([...messages, errorMessage]);
-      return;
-    }
+    // 如果不在等待确认状态，且没有当前帧，使用第一帧（由父组件处理，这里不需要提示）
+    // 移除错误提示，让父组件处理默认使用第一帧的逻辑
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -416,17 +407,6 @@ export function ObjectSelectionChatBox({
           <Bot className="h-4 w-4 text-primary" />
           <h3 className="text-sm font-semibold">AI agent</h3>
         </div>
-        {onToggleMinimize && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onToggleMinimize}
-            className="h-6 w-6 p-0"
-            title="最小化"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-        )}
       </div>
 
       {/* Messages */}
@@ -438,43 +418,7 @@ export function ObjectSelectionChatBox({
           <div className="text-center text-sm text-muted-foreground py-8">
             <Bot className="h-8 w-8 mx-auto mb-2 opacity-50" />
             <p>请描述您想要删除或提取的对象</p>
-            <p className="text-xs mt-2">例如："删除这个讨厌的老鼠"</p>
-          </div>
-        )}
-
-        {waitingForConfirmation && (
-          <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 mb-4">
-            <p className="text-sm font-medium text-primary mb-2">遮罩预览已生成</p>
-            <p className="text-xs text-muted-foreground mb-3">
-              请选择操作：
-            </p>
-            <div className="flex gap-2">
-              <Button
-                onClick={() => {
-                  if (onUserConfirm) {
-                    console.log("✅ User confirmed via button, calling onUserConfirm");
-                    onUserConfirm();
-                  }
-                }}
-                size="sm"
-                className="flex-1"
-              >
-                确认
-              </Button>
-              <Button
-                onClick={() => {
-                  if (onUserCancel) {
-                    console.log("❌ User cancelled via button, calling onUserCancel");
-                    onUserCancel();
-                  }
-                }}
-                size="sm"
-                variant="outline"
-                className="flex-1"
-              >
-                重选
-              </Button>
-            </div>
+            <p className="text-xs mt-2">例如："删除这只讨厌的老鼠"</p>
           </div>
         )}
 
@@ -539,37 +483,67 @@ export function ObjectSelectionChatBox({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input - 在等待确认时隐藏 */}
-      {!waitingForConfirmation && (
-        <div className="border-t p-4 flex-shrink-0">
-          <div className="flex gap-2">
-            <textarea
-              ref={inputRef}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="描述要删除或提取的对象..."
-              className="flex-1 min-h-[36px] max-h-[120px] px-3 py-2 text-sm border rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-primary"
-              rows={1}
-              disabled={isTyping}
-              autoFocus={false}
-            />
-            <Button
-              onClick={handleSendMessage}
-              disabled={!inputValue.trim() || isTyping || !currentFrameImageUrl}
-              size="sm"
-              className="flex-shrink-0"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
-          {!currentFrameImageUrl && (
-            <p className="text-xs text-muted-foreground mt-2">
-              请在时间轴上选择一帧视频
+      {/* Input */}
+      <div className="border-t p-4 flex-shrink-0">
+        {/* 等待确认提示框 - 显示在输入框上方 */}
+        {waitingForConfirmation && (
+          <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 mb-4">
+            <p className="text-sm font-medium text-primary mb-2">遮罩预览已生成</p>
+            <p className="text-xs text-muted-foreground mb-3">
+              请选择操作：
             </p>
-          )}
+            <div className="flex gap-2">
+              <Button
+                onClick={() => {
+                  if (onUserConfirm) {
+                    console.log("✅ User confirmed via button, calling onUserConfirm");
+                    onUserConfirm();
+                  }
+                }}
+                size="sm"
+                className="flex-1"
+              >
+                确认
+              </Button>
+              <Button
+                onClick={() => {
+                  if (onUserCancel) {
+                    console.log("❌ User cancelled via button, calling onUserCancel");
+                    onUserCancel();
+                  }
+                }}
+                size="sm"
+                variant="outline"
+                className="flex-1"
+              >
+                重选
+              </Button>
+            </div>
+          </div>
+        )}
+        
+        <div className="flex gap-2">
+          <textarea
+            ref={inputRef}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="描述要删除或提取的对象..."
+            className="flex-1 min-h-[36px] max-h-[120px] px-3 py-2 text-sm border rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            rows={1}
+            disabled={isTyping || waitingForConfirmation}
+            autoFocus={false}
+          />
+          <Button
+            onClick={handleSendMessage}
+            disabled={!inputValue.trim() || isTyping || waitingForConfirmation}
+            size="sm"
+            className="flex-shrink-0"
+          >
+            <Send className="h-4 w-4" />
+          </Button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -9,10 +9,46 @@ export interface ClickPoint {
   frameUrl: string;
 }
 
+/**
+ * Visual Prompt Point - 用于 SAM3 visual_prompt 的点坐标
+ */
+export interface VisualPromptPoint {
+  id: string; // 唯一标识
+  x: number; // 像素坐标 X
+  y: number; // 像素坐标 Y
+  normalizedX: number; // 归一化坐标 X (0-1)
+  normalizedY: number; // 归一化坐标 Y (0-1)
+  label: 1 | 0; // 1=包含, 0=排除
+  textPrompt?: string; // 对应的文本提示（如 "dog", "mouse"）
+  frameIndex: number; // 帧索引（对应视频帧）
+  timestamp: number; // 时间戳（秒）
+}
+
 export interface MaskData {
   preview: string; // base64 image
   maskUrl?: string;
   predictionId?: string;
+  // 新增：visual_prompt 相关
+  visualPromptPoints?: VisualPromptPoint[]; // 所有点击点
+  textPrompt?: string; // 合并的文本提示（如 "dog, mouse"）
+  negativePrompt?: string; // 排除提示（如 "cat"）
+  imageWidth?: number; // 图片宽度（用于坐标转换）
+  imageHeight?: number; // 图片高度
+}
+
+/**
+ * 待确认的遮罩操作
+ */
+export interface PendingMaskOperation {
+  type: "add" | "remove";
+  clickX: number; // 像素坐标
+  clickY: number; // 像素坐标
+  normalizedX: number; // 归一化坐标
+  normalizedY: number; // 归一化坐标
+  point?: VisualPromptPoint; // 如果是移除操作，指向要移除的点
+  isInMask: boolean; // 点击是否在遮罩内
+  frameIndex: number; // 帧索引
+  timestamp: number; // 时间戳
 }
 
 export interface ObjectSelectionState {
@@ -21,6 +57,9 @@ export interface ObjectSelectionState {
   selectedFrameIndex: number | null;
   selectedObject: ClickPoint | null;
   pendingAction: "remove" | "extract" | null;
+  // 新增：遮罩编辑相关
+  pendingMaskOperation: PendingMaskOperation | null; // 待确认的操作
+  isMaskEditMode: boolean; // 是否处于遮罩编辑模式
 }
 
 const deepClone = <T>(obj: T): T => JSON.parse(JSON.stringify(obj));
@@ -32,6 +71,8 @@ export function useObjectSelection(initialState?: Partial<ObjectSelectionState>)
     selectedFrameIndex: null,
     selectedObject: null,
     pendingAction: null,
+    pendingMaskOperation: null,
+    isMaskEditMode: false,
     ...initialState,
   };
 
@@ -115,7 +156,23 @@ export function useObjectSelection(initialState?: Partial<ObjectSelectionState>)
       ...prev,
       selectedFrameIndex: index,
       selectedObject: null,
-      maskData: null,
+      // 切换帧时不清除遮罩，保持编辑状态
+      // maskData: null,
+    }));
+  }, [updateState]);
+
+  const setPendingMaskOperation = useCallback((operation: PendingMaskOperation | null) => {
+    updateState((prev) => ({
+      ...prev,
+      pendingMaskOperation: operation,
+    }));
+  }, [updateState]);
+
+  const setIsMaskEditMode = useCallback((enabled: boolean) => {
+    updateState((prev) => ({
+      ...prev,
+      isMaskEditMode: enabled,
+      pendingMaskOperation: enabled ? prev.pendingMaskOperation : null,
     }));
   }, [updateState]);
 
@@ -158,6 +215,12 @@ export function useObjectSelection(initialState?: Partial<ObjectSelectionState>)
     canUndo,
     canRedo,
     snapshotState,
+    // 遮罩编辑
+    setPendingMaskOperation,
+    setIsMaskEditMode,
   };
 }
+
+// 导出类型
+export type { PendingMaskOperation, VisualPromptPoint };
 

@@ -8,6 +8,21 @@ import { type ActionFunctionArgs } from "react-router";
 const DIFY_BASE_URL = process.env.DIFY_API_URL || process.env.DIFY_BASE_URL || "https://api.dify.ai/v1";
 const DIFY_API_KEY = process.env.DIFY_API_KEY || "";
 
+// 简单的内存缓存：frameImageUrl -> upload_file_id（在同一对话中复用）
+// 注意：这是进程内缓存，重启后会丢失，但对于减少重复上传已经足够
+const imageUploadCache = new Map<string, { fileId: string; timestamp: number }>();
+const CACHE_TTL = 30 * 60 * 1000; // 30分钟过期
+
+// 清理过期缓存
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of imageUploadCache.entries()) {
+    if (now - value.timestamp > CACHE_TTL) {
+      imageUploadCache.delete(key);
+    }
+  }
+}, 5 * 60 * 1000); // 每5分钟清理一次
+
 export async function action({ request, params }: ActionFunctionArgs) {
   try {
     // 检查路径，只处理 /api/dify/chat
@@ -52,18 +67,30 @@ export async function action({ request, params }: ActionFunctionArgs) {
       requestBody.app_id = appId;
     }
 
-    // 如果有图片URL，需要先上传到 Dify
+    // 如果有图片URL，需要先上传到 Dify（或使用缓存的 file ID）
     if (frameImageUrl) {
-      // 检测是否是 base64 数据 URL
-      const isBase64 = frameImageUrl.startsWith("data:image/");
+      // 检查内存缓存
+      const cached = imageUploadCache.get(frameImageUrl);
+      const now = Date.now();
       
-      if (isBase64) {
-        console.log("📤 Uploading base64 image to Dify (length:", frameImageUrl.length, "chars)");
+      let uploadFileId: string;
+      
+      if (cached && (now - cached.timestamp) < CACHE_TTL) {
+        // 使用缓存的 file ID
+        console.log("✅ Using cached file ID from memory:", cached.fileId);
+        uploadFileId = cached.fileId;
       } else {
-        console.log("📤 Uploading frame image to Dify:", frameImageUrl);
-      }
-      
-      let imageBlob: Blob;
+        // 需要上传图片
+        // 检测是否是 base64 数据 URL
+        const isBase64 = frameImageUrl.startsWith("data:image/");
+        
+        if (isBase64) {
+          console.log("📤 Uploading base64 image to Dify (length:", frameImageUrl.length, "chars)");
+        } else {
+          console.log("📤 Uploading frame image to Dify:", frameImageUrl);
+        }
+        
+        let imageBlob: Blob;
       
       if (isBase64) {
         // 处理 base64 数据 URL
@@ -128,15 +155,25 @@ export async function action({ request, params }: ActionFunctionArgs) {
         throw new Error("Upload result missing file ID");
       }
       
-      // 根据 Dify API 文档，inputs 中需要 user_message 和 frame_image
-      requestBody.inputs = {
-        user_message: query,
-        frame_image: {
-          type: "image",
-          transfer_method: "local_file",
-          upload_file_id: uploadResult.id,
-        },
-      };
+      uploadFileId = uploadResult.id;
+      
+      // 缓存 file ID（30分钟有效期）
+      imageUploadCache.set(frameImageUrl, {
+        fileId: uploadFileId,
+        timestamp: Date.now(),
+      });
+      console.log("💾 Cached file ID for future requests:", frameImageUrl.substring(0, 50) + "...");
+    }
+    
+    // 根据 Dify API 文档，inputs 中需要 user_message 和 frame_image
+    requestBody.inputs = {
+      user_message: query,
+      frame_image: {
+        type: "image",
+        transfer_method: "local_file",
+        upload_file_id: uploadFileId,
+      },
+    };
     } else {
       // 没有图片时，只需要 user_message
       requestBody.inputs = {

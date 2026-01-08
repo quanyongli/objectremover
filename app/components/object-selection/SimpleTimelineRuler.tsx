@@ -32,6 +32,7 @@ export const SimpleTimelineRuler: React.FC<SimpleTimelineRulerProps> = ({
       .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}:${frames.toString().padStart(2, "0")}`;
   };
 
+  // rulerPositionPx 是相对于标尺内容区域的位置（不包含padding）
   const currentTimeInSeconds = rulerPositionPx / pixelsPerSecond;
 
   return (
@@ -46,13 +47,15 @@ export const SimpleTimelineRuler: React.FC<SimpleTimelineRulerProps> = ({
             width: `${timelineWidth}px`,
             transform: `translateX(-${scrollLeft}px)`,
           }}
-          onClick={(e) => {
-            if (containerRef.current) {
-              const rulerRect = e.currentTarget.getBoundingClientRect();
-              const clickXInRuler = e.clientX - rulerRect.left;
-              onRulerDrag(clickXInRuler);
-            }
-          }}>
+          // 禁用点击选择功能
+          // onClick={(e) => {
+          //   if (containerRef.current) {
+          //     const rulerRect = e.currentTarget.getBoundingClientRect();
+          //     const clickXInRuler = e.clientX - rulerRect.left;
+          //     onRulerDrag(clickXInRuler);
+          //   }
+          // }}
+        >
           {/* 主要刻度标记 */}
           {(() => {
             const elements: React.ReactNode[] = [];
@@ -93,30 +96,22 @@ export const SimpleTimelineRuler: React.FC<SimpleTimelineRulerProps> = ({
             return elements;
           })()}
 
-          {/* 游标竖线 */}
-          <div
-            className="absolute top-0 w-0.5 bg-black pointer-events-none z-30"
-            style={{
-              left: `${rulerPositionPx}px`,
-              height: "24px",
-            }}
-          />
-
-          {/* 游标倒三角 */}
-          <div
-            className="absolute cursor-grab hover:cursor-grabbing z-30"
+          {/* 游标图标 - 使用提供的 cursor.png (16x24，高度与时间框保持一致) */}
+          <img
+            src="/cursor.png"
+            alt="Timeline cursor"
+            className="absolute cursor-grab hover:cursor-grabbing z-30 pointer-events-auto"
             style={{
               left: `${rulerPositionPx}px`,
               top: "0px",
-              width: "0",
-              height: "0",
-              borderLeft: "6px solid transparent",
-              borderRight: "6px solid transparent",
-              borderTop: "8px solid black",
+              width: "16px",
+              height: "24px",
               transform: "translateX(-50%)",
+              imageRendering: "crisp-edges",
             }}
             onMouseDown={onRulerMouseDown}
             title="Drag to seek"
+            draggable={false}
           />
         </div>
       </div>

@@ -47,9 +47,37 @@ export function FrameTimeline({
   const timelineWidth = duration * pixelsPerSecond;
 
   // 同步当前时间到标尺位置
+  // 如果选择了帧，优先使用选中帧的中心位置；否则使用currentTime
   useEffect(() => {
-    setRulerPositionPx(currentTime * pixelsPerSecond);
-  }, [currentTime, pixelsPerSecond]);
+    if (selectedFrameIndex !== null && frames.length > 0 && selectedFrameIndex < frames.length) {
+      // 如果选择了帧，使用该帧的中心位置
+      const effectiveWidth = Math.max(timelineWidth, containerWidthPx || timelineWidth);
+      const frameWidth = effectiveWidth / frames.length;
+      const frameLeft = selectedFrameIndex * frameWidth;
+      const frameCenter = frameLeft + frameWidth / 2;
+      // 竖线应该指向帧的中心，加上padding (16px)
+      setRulerPositionPx(frameCenter + 16);
+    } else if (frames.length > 0) {
+      // 如果currentTime接近或等于视频时长，使用最后一帧的中心位置
+      const lastFrame = frames[frames.length - 1];
+      const duration = frames.length > 0 ? lastFrame.timestamp : 0;
+      // 检查是否播放完成（currentTime 接近或等于视频时长）
+      if (currentTime >= duration - 0.1 && duration > 0) {
+        // 使用最后一帧的中心位置
+        const effectiveWidth = Math.max(timelineWidth, containerWidthPx || timelineWidth);
+        const frameWidth = effectiveWidth / frames.length;
+        const frameLeft = (frames.length - 1) * frameWidth;
+        const frameCenter = frameLeft + frameWidth / 2;
+        setRulerPositionPx(frameCenter + 16);
+      } else {
+        // 否则使用currentTime计算位置，加上padding (16px)
+        setRulerPositionPx(currentTime * pixelsPerSecond + 16);
+      }
+    } else {
+      // 如果没有帧，使用currentTime计算位置，加上padding (16px)
+      setRulerPositionPx(currentTime * pixelsPerSecond + 16);
+    }
+  }, [currentTime, pixelsPerSecond, selectedFrameIndex, frames, timelineWidth, containerWidthPx]);
 
   // 处理标尺拖拽
   const handleRulerDrag = useCallback((newPositionPx: number) => {
@@ -196,9 +224,9 @@ export function FrameTimeline({
       <div className="px-4">
         <SimpleTimelineRuler
           timelineWidth={timelineWidth}
-          rulerPositionPx={rulerPositionPx}
+          rulerPositionPx={rulerPositionPx - 16}
           containerRef={containerRef}
-          onRulerDrag={handleRulerDrag}
+          onRulerDrag={(newPositionPx) => handleRulerDrag(newPositionPx + 16)}
           onRulerMouseDown={handleRulerMouseDown}
           pixelsPerSecond={pixelsPerSecond}
           scrollLeft={scrollLeft}
@@ -211,13 +239,20 @@ export function FrameTimeline({
         ref={containerRef}
         onScroll={handleScroll}
       >
-        {/* 当前时间竖线 - 贯穿整个时间轴，对齐到标尺位置，使用黑色 */}
-        <div
-          className="absolute top-0 bottom-0 w-0.5 bg-black pointer-events-none z-20"
-          style={{
-            left: `${rulerPositionPx + 16}px`, // 加上 padding (px-4 = 16px) 以对齐标尺
-          }}
-        />
+        {/* 当前时间竖线 - 贯穿整个时间轴，对齐到标尺游标箭头中心，使用黑色 */}
+        {/* 竖线需要与游标图标下面箭头的中心对齐：
+            - 游标图标使用 translateX(-50%) 居中，所以箭头中心在 rulerPositionPx
+            - 竖线也使用 translateX(-50%) 来居中对齐，确保中心与游标箭头中心对齐 */}
+        {/* 确保竖线始终可见，即使视频播放完成 */}
+        {(currentTime > 0 || selectedFrameIndex !== null) && (
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-black pointer-events-none z-20"
+            style={{
+              left: `${rulerPositionPx}px`, // 与游标图标使用相同的位置
+              transform: "translateX(-50%)", // 使用transform来精确居中对齐，与游标图标保持一致
+            }}
+          />
+        )}
         
         {/* 缩略图容器，添加 padding 以对齐标尺，确保从时间0开始显示 */}
         <div
@@ -229,7 +264,9 @@ export function FrameTimeline({
             const effectiveWidth = Math.max(timelineWidth, containerWidthPx || timelineWidth);
             const frameWidth = effectiveWidth / frames.length;
             // 等分定位，使缩略图填满整个时间轴
+            // 帧的中心位置 = frameLeft + frameWidth / 2
             const frameLeft = index * frameWidth + 16; // 加上 padding (px-4 = 16px)
+            const frameCenter = frameLeft + frameWidth / 2;
             const isSelected = selectedFrameIndex === index;
             const isCurrentFrame =
               currentTime >= frame.timestamp &&
@@ -240,7 +277,7 @@ export function FrameTimeline({
                 key={index}
                 className={`absolute flex-shrink-0 cursor-pointer transition-all ${
                   isSelected
-                    ? "ring-2 ring-primary/20"
+                    ? "ring-2 ring-primary ring-offset-1"
                     : ""
                 }`}
                 onClick={() => onFrameSelect(index)}
@@ -251,12 +288,15 @@ export function FrameTimeline({
                   top: "50%",
                   transform: `translateY(-50%) scale(${isSelected ? 1.33 : 1})`,
                   transformOrigin: "center",
+                  zIndex: isSelected ? 30 : 10,
+                  // 确保选中的缩略图边框完整可见，不被其他元素遮挡
+                  position: "absolute",
                 }}
               >
                 <img
                   src={frame.url}
                   alt={`Frame ${index}`}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover rounded-sm"
                 />
               </div>
             );
